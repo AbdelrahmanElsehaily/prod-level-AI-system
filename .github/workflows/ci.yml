@@ -32,34 +32,52 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Install the exact Python version our app requires.
-      # actions/setup-python handles downloading, caching, and adding
-      # Python to PATH. Always pin a specific version — "3.12" not "3.x"
-      # so a future minor release can't silently break your CI.
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      # Step 2: Install uv — the package manager for this project.
+      #
+      # Why uv instead of pip?
+      #   uv is a Rust-based package manager from Astral (same team as ruff).
+      #   It resolves and installs packages 10-100x faster than pip because:
+      #     - Dependency resolution runs in Rust (not Python)
+      #     - It has a global cache shared across projects and CI runs
+      #     - It reads uv.lock (our committed lockfile) directly — no re-solving
+      #
+      # enable-cache: true → the action caches uv's global package cache in
+      # GitHub Actions cache between runs. If uv.lock hasn't changed, the next
+      # run restores all packages from cache in ~2 seconds instead of downloading.
+      #
+      # python-version: reads .python-version automatically when not specified,
+      # but we set it explicitly here so the CI job self-documents its requirement.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
         with:
+          enable-cache: true
           python-version: "3.12"
-          # cache: pip tells the action to cache pip's download cache
-          # between runs. If pyproject.toml hasn't changed, dependencies
-          # are restored from cache in ~5s instead of downloaded in ~30s.
-          cache: pip
 
-      # Step 3: Install all project dependencies (runtime + dev).
-      # pip install -e ".[dev]" installs the package in editable mode
-      # (so `from app.xxx import yyy` resolves to our local code, not
-      # a dist-package) and includes the dev extras (pytest, ruff, etc.).
+      # Step 3: Install all project dependencies from the lockfile.
+      #
+      # `uv sync` reads uv.lock and installs the EXACT pinned versions —
+      # not "resolve and install", just "install what the lockfile says".
+      # This is reproducible: CI always gets the same packages as local dev.
+      #
+      # --all-extras installs both runtime deps AND the [dev] group
+      # (pytest, ruff, mypy, etc.) which are needed to run tests.
+      #
+      # uv also creates and manages the virtual environment automatically —
+      # no need to manually activate a venv before running commands.
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: uv sync --all-extras
 
       # Step 4: Run only the unit tests.
-      # -v           → verbose output: show each test name as it runs
-      # --tb=short   → on failure, show a short traceback (not the full wall of text)
-      # tests/unit/  → only run files inside this directory
+      #
+      # `uv run` executes the command inside the project's virtual environment
+      # that `uv sync` set up — no need to activate it manually.
+      #
+      # -v         → verbose: show each test name as it runs
+      # --tb=short → on failure, show a compact traceback (not the full wall of text)
       #
       # Unit tests need NO environment variables — all dependencies are mocked.
       - name: Run unit tests
-        run: pytest tests/unit/ -v --tb=short
+        run: uv run pytest tests/unit/ -v --tb=short
 
   # ---------------------------------------------------------------------------
   # Job 2: integration-tests
@@ -121,14 +139,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
         with:
+          enable-cache: true
           python-version: "3.12"
-          cache: pip
 
       - name: Install dependencies
-        run: pip install -e ".[dev]"
+        run: uv sync --all-extras
 
       # Run integration tests.
       #
@@ -146,4 +164,4 @@ jobs:
       # Once real integration tests exist, exit code 5 will never occur
       # and this workaround becomes invisible.
       - name: Run integration tests
-        run: pytest tests/integration/ -v --tb=short || [ $? -eq 5 ]
+        run: uv run pytest tests/integration/ -v --tb=short || [ $? -eq 5 ]
