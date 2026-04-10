@@ -1,0 +1,23 @@
+# Secrets — never commit these
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Build artifacts
+dist/
+*.egg-info/
+
+# Editor
+.vscode/
+.idea/
+*.swp
