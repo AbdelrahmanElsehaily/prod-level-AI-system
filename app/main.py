@@ -1,28 +1,12 @@
 """
 app/main.py — FastAPI application entry point
 ==============================================
-This file has one job: create the FastAPI app instance and wire everything
-together. It should contain NO business logic — that lives in routers/ and
-services/.
+This file creates the FastAPI app instance and wires everything together:
+  - Lifespan: startup (open Redis pool, init logging) and shutdown (close pool)
+  - Middleware: registered in reverse execution order (last added = first to run)
+  - Routers: each domain's endpoints mounted here
 
-Key concepts introduced here:
-
-1. Lifespan context manager
-   FastAPI replaced @app.on_event("startup") / @app.on_event("shutdown")
-   with a single lifespan context manager (Python 3.10+). Everything before
-   `yield` runs at startup; everything after runs at shutdown.
-   This keeps startup and shutdown paired in one place, making it impossible
-   to forget to clean up a resource you opened.
-
-2. app.state
-   FastAPI's built-in place to store process-wide objects that should be
-   shared across requests but NOT re-created on every request.
-   We store the Redis client here so every request uses the same connection pool.
-
-3. include_router
-   Mounts a group of routes from a router file into the main app.
-   This is how we keep routes organised as the API grows — each domain
-   (health, chat, metrics) lives in its own file.
+No business logic lives here — that belongs in routers/ and services/.
 """
 
 from contextlib import asynccontextmanager
@@ -32,44 +16,48 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI
 
 from app.config import settings
+from app.logging_config import setup_logging
+from app.middleware.logging import LoggingMiddleware
 from app.routers import health
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
-    Manage resources that must live for the full lifetime of the process.
+    Manage process-wide resources that live for the full lifetime of the app.
 
-    Startup (code before yield):
-      - Create the Redis connection pool. We do this once so all requests
-        share the same pool rather than opening a new TCP connection each time.
+    Everything BEFORE yield → startup
+    Everything AFTER yield  → shutdown (runs even if the app crashes)
 
-    Shutdown (code after yield):
-      - Close the Redis connection pool gracefully. This flushes any buffered
-        commands and closes TCP connections cleanly rather than dropping them.
-        Without this, Redis may log "connection closed unexpectedly" errors.
-
-    FastAPI guarantees the cleanup runs even if the app crashes —
-    similar to a try/finally block.
+    Startup order matters:
+      1. Logging first — so any errors during startup are captured in structured logs.
+      2. Redis second — so the connection pool is ready before requests arrive.
     """
-    # --- STARTUP ---
+    # 1. Configure structured logging before anything else logs.
+    #    After this call, all log output is JSON (production) or
+    #    colour-coded text (development) with consistent fields.
+    setup_logging()
+
+    # 2. Create the Redis connection pool and store it on app.state.
+    #    app.state is FastAPI's built-in process-wide key-value store.
+    #    Storing the client here means all requests share ONE pool instead
+    #    of opening a new TCP connection per request.
     app.state.redis = aioredis.from_url(
         settings.redis_url,
-        # decode_responses=True means Redis returns Python strings instead of
-        # raw bytes. Without this, every value you read is b"some bytes" and
-        # you have to decode it manually everywhere.
+        # decode_responses=True: Redis returns str instead of bytes.
+        # Without this, every cached value would be b"..." and need manual decoding.
         decode_responses=True,
     )
 
-    yield  # Application runs here — handling requests
+    yield  # ← The application runs here, handling requests
 
-    # --- SHUTDOWN ---
+    # Shutdown: close the Redis pool gracefully.
+    # aclose() sends a QUIT command, waits for in-flight commands, and
+    # closes the underlying TCP connections. Without this, the OS forcibly
+    # closes the sockets and Redis logs "connection closed unexpectedly".
     await app.state.redis.aclose()
 
 
-# Create the FastAPI application instance.
-# - title / version appear in the auto-generated docs at /docs
-# - lifespan=lifespan wires up our startup/shutdown logic
 app = FastAPI(
     title="Chat API",
     version=settings.version,
@@ -77,14 +65,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# --- Mount routers ---
-# include_router registers all routes defined in health.router with the app.
-# tags=["Health"] groups these endpoints under a "Health" section in /docs.
+# --- Middleware ---
+# Middleware wraps every request/response cycle.
+# add_middleware() calls form a STACK — the last one added runs FIRST
+# on incoming requests (and last on outgoing responses).
+#
+# Current stack (first to run on incoming requests → last):
+#   1. LoggingMiddleware — generates request_id, logs start/end of every request
+#
+# Step 6 will prepend RateLimitMiddleware so it runs before logging.
+app.add_middleware(LoggingMiddleware)
+
+# --- Routers ---
+# include_router mounts all routes from a router module onto the app.
+# tags=["Health"] groups these endpoints under "Health" in the /docs UI.
 app.include_router(health.router, tags=["Health"])
 
 
-# Keep the root route from Step 1.
-# In a real production app this might redirect to /docs or return API metadata.
 @app.get("/", tags=["Root"])
 async def root() -> dict[str, str]:
     """Minimal root endpoint — confirms the app is reachable."""
