@@ -2,6 +2,15 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Hatchling (our build backend) looks for a directory whose name matches the
+# project name to know what to package. Our project is named "chat-api" but
+# the actual Python package lives in the "app/" directory — those names don't
+# match, so we must point hatchling at it explicitly.
+# Without this, `pip install -e .` fails with "Unable to determine which files
+# to ship inside the wheel".
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
 [project]
 name = "chat-api"
 version = "0.1.0"
