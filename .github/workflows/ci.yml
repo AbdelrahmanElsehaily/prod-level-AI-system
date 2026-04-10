@@ -60,3 +60,90 @@ jobs:
       # Unit tests need NO environment variables — all dependencies are mocked.
       - name: Run unit tests
         run: pytest tests/unit/ -v --tb=short
+
+  # ---------------------------------------------------------------------------
+  # Job 2: integration-tests
+  # ---------------------------------------------------------------------------
+  # Runs tests that require REAL Postgres and Redis.
+  # The Anthropic API is still mocked — we never make real AI calls in tests.
+  #
+  # `needs: [unit-tests]` means this job only starts after unit-tests passes.
+  # Why gate it? Integration tests spin up Docker services and take longer.
+  # If unit tests are already broken, fail fast and save the CI minutes.
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [unit-tests]  # Only run if unit tests pass
+
+    # Service containers: GitHub spins these up as Docker containers BEFORE
+    # any steps run. They share a Docker network with the runner, so your code
+    # reaches them at localhost:<port> — exactly like local dev.
+    # GitHub tears them down automatically when the job finishes.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: chatapi
+        ports:
+          # Map container port 5432 → host port 5432 so our code reaches it
+          # at postgresql://...@localhost:5432/chatapi
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+          # --health-retries 5 means GitHub waits up to 25s for Postgres to be
+          # ready before starting the steps. Without this, steps might start
+          # while Postgres is still initialising and fail with a connection error.
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    # Environment variables available to ALL steps in this job.
+    # These mirror what docker-compose.yml sets for local dev, but point to
+    # the service containers above (which are reachable at localhost).
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chatapi
+      REDIS_URL: redis://localhost:6379
+      ENVIRONMENT: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      # Run integration tests.
+      #
+      # The `|| [ $? -eq 5 ]` at the end handles pytest exit code 5, which
+      # means "no tests were collected". Right now tests/integration/ has no
+      # test files — they are added in Steps 4 and 5. Without this, CI would
+      # fail with "no tests found" even though nothing is actually broken.
+      #
+      # Exit code semantics:
+      #   0 → all tests passed           ✅ CI passes
+      #   1 → tests ran, some failed     ❌ CI fails (real failure)
+      #   2 → interrupted / bad usage    ❌ CI fails
+      #   5 → no tests collected         ✅ treated as pass (temporarily)
+      #
+      # Once real integration tests exist, exit code 5 will never occur
+      # and this workaround becomes invisible.
+      - name: Run integration tests
+        run: pytest tests/integration/ -v --tb=short || [ $? -eq 5 ]
