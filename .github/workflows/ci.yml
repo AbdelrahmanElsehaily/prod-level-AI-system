@@ -1,0 +1,62 @@
+name: CI
+
+# When does this workflow run?
+#
+# on: pull_request        → every time a PR is opened, updated, or reopened
+# branches: [develop, main] → only for PRs targeting these branches
+#
+# This means a PR from feat/x → develop triggers CI.
+# A PR from develop → main also triggers CI (double-check before release).
+# A branch push with no PR does NOT trigger this workflow.
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: unit-tests
+  # ---------------------------------------------------------------------------
+  # Runs fast, in-memory tests with no external services.
+  # If this fails there is no point running the slower integration tests.
+  unit-tests:
+    name: Unit Tests
+    # ubuntu-latest is GitHub's standard Linux runner.
+    # It's a fresh VM for every run — no state bleeds between runs.
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out the branch that triggered the PR.
+      # Without this step the runner has an empty workspace.
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Install the exact Python version our app requires.
+      # actions/setup-python handles downloading, caching, and adding
+      # Python to PATH. Always pin a specific version — "3.12" not "3.x"
+      # so a future minor release can't silently break your CI.
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          # cache: pip tells the action to cache pip's download cache
+          # between runs. If pyproject.toml hasn't changed, dependencies
+          # are restored from cache in ~5s instead of downloaded in ~30s.
+          cache: pip
+
+      # Step 3: Install all project dependencies (runtime + dev).
+      # pip install -e ".[dev]" installs the package in editable mode
+      # (so `from app.xxx import yyy` resolves to our local code, not
+      # a dist-package) and includes the dev extras (pytest, ruff, etc.).
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      # Step 4: Run only the unit tests.
+      # -v           → verbose output: show each test name as it runs
+      # --tb=short   → on failure, show a short traceback (not the full wall of text)
+      # tests/unit/  → only run files inside this directory
+      #
+      # Unit tests need NO environment variables — all dependencies are mocked.
+      - name: Run unit tests
+        run: pytest tests/unit/ -v --tb=short
