@@ -10,9 +10,9 @@ missing. Centralising them here means one place to look, one place to validate.
 
 We use Pydantic's BaseSettings, which:
   1. Reads values from environment variables automatically (by field name)
-  2. Validates types — e.g. if DATABASE_URL is missing, startup fails immediately
-     with a clear error instead of a cryptic crash later
-  3. Supports .env files in development via python-dotenv (included in pydantic-settings)
+  2. Validates types — if a required var is missing, startup fails immediately
+     with a clear error instead of a cryptic crash deep inside a request
+  3. Supports .env files in development via python-dotenv (bundled with pydantic-settings)
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -21,28 +21,42 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # --- Application identity ---
     # Controls log format (json in production, pretty-print in development)
-    # and which Sentry environment tag is used.
     environment: str = "development"
 
-    # Semantic version of this app, used in /health response so you can
-    # see at a glance which version is running on each environment.
+    # Semantic version shown in /health and /docs
     version: str = "0.1.0"
 
-    # --- External services ---
+    # --- Database ---
     # asyncpg is the async Postgres driver; SQLAlchemy uses it via the
     # "postgresql+asyncpg://" scheme.
     database_url: str = (
         "postgresql+asyncpg://postgres:postgres@localhost:5432/chatapi"
     )
 
+    # --- Cache / rate limiting ---
     # Redis is used for rate limiting (Step 6) and response caching (Step 12).
     redis_url: str = "redis://localhost:6379"
 
-    # --- AI provider ---
-    # Required in production. We use | None so startup doesn't crash in local
-    # dev if you haven't set this yet — the AI endpoint will fail at call-time
-    # with a clear error instead.
-    anthropic_api_key: str | None = None
+    # --- AI provider: Ollama ---
+    # Ollama runs open-source LLMs locally (Llama, Mistral, Gemma, etc.).
+    # It exposes a REST API — no cloud account, no API key, no usage costs.
+    #
+    # ollama_base_url: where the Ollama server is listening.
+    #   - Local dev:   http://localhost:11434   (default)
+    #   - Docker:      http://host.docker.internal:11434
+    #                  (host.docker.internal resolves to your Mac's localhost
+    #                   from inside a Docker container — needed because
+    #                   "localhost" inside a container means the container itself,
+    #                   not the host machine where Ollama is running)
+    #   - Remote:      http://<server-ip>:11434
+    ollama_base_url: str = "http://localhost:11434"
+
+    # ollama_model: which model to run. Must be pulled first with:
+    #   ollama pull llama3.2
+    # Any model available in `ollama list` works here.
+    # Override per-environment without touching code:
+    #   OLLAMA_MODEL=mistral docker compose up
+    ollama_model: str = "llama3.2"
 
     # --- Observability ---
     # Optional — Sentry is only initialised if this is set (Step 8).
@@ -59,8 +73,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
-# Module-level singleton — import and use this everywhere.
-# Calling Settings() reads and validates all env vars once at import time.
-# If something is wrong (e.g. a required var is missing), the app fails fast
-# at startup rather than in the middle of handling a request.
+# Module-level singleton — import this everywhere instead of calling os.getenv().
+# Pydantic validates all fields at import time. If something is wrong
+# (wrong type, missing required field), the app crashes immediately at startup
+# with a clear validation error — not silently mid-request.
 settings = Settings()
