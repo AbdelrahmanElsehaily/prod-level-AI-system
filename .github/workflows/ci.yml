@@ -105,17 +105,16 @@ jobs:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: chatapi
         ports:
-          # Map container port 5432 → host port 5432 so our code reaches it
-          # at postgresql://...@localhost:5432/chatapi
           - 5432:5432
+        # options is passed verbatim to `docker create` — no comments allowed
+        # inside this block. YAML's >- folded scalar collapses every line
+        # (including comment lines) into a single space-separated string, so
+        # a # comment becomes a literal argument to docker and fails the command.
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
-          # --health-retries 5 means GitHub waits up to 25s for Postgres to be
-          # ready before starting the steps. Without this, steps might start
-          # while Postgres is still initialising and fail with a connection error.
 
       redis:
         image: redis:7-alpine
@@ -133,7 +132,10 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chatapi
       REDIS_URL: redis://localhost:6379
-      ENVIRONMENT: test
+      # "ci" triggers JSON logging and runs migrations on startup.
+      # Do NOT use "test" here — that skips migrations, so the DB tables
+      # would not exist and all integration tests would fail.
+      ENVIRONMENT: ci
 
     steps:
       - name: Checkout code
