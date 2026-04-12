@@ -44,11 +44,33 @@ def run_migrations() -> None:
       internally via our env.py setup). We call it here before the async event
       loop handles any requests — there's no concurrency conflict.
 
+    Why skip in test environment?
+      migrations/env.py calls asyncio.run() to drive the async Alembic runner.
+      Unit tests run inside pytest-asyncio's event loop, and asyncio.run()
+      cannot be called from within a running event loop — it raises:
+          RuntimeError: asyncio.run() cannot be called from a running event loop
+
+      Unit tests mock the database entirely (via dependency_overrides), so there
+      is no real Postgres to migrate against. Skipping is correct behaviour,
+      not a workaround — we are not testing migrations here.
+
+      Integration tests (tests/integration/) run against a real Postgres and
+      DO need migrations applied. They handle that by setting ENVIRONMENT to
+      anything other than "test", or by calling alembic upgrade head directly
+      in the CI service container setup step.
+
     In production (Railway), the railway.toml start command runs:
         alembic upgrade head && uvicorn app.main:app ...
     meaning migrations run BEFORE the process even starts. This function is
     the local-dev / Docker equivalent so `docker compose up` also works.
     """
+    if settings.environment == "test":
+        # No real DB in unit tests — all DB calls are mocked via
+        # dependency_overrides. Running migrations would fail anyway
+        # (no Postgres listening), and would hit the asyncio.run()
+        # conflict described above.
+        return
+
     alembic_cfg = Config("alembic.ini")
     # Override the database URL from settings rather than alembic.ini,
     # so the same config file works in every environment without editing it.
