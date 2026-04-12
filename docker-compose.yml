@@ -7,7 +7,14 @@ services:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/chatapi
       - REDIS_URL=redis://redis:6379
       - ENVIRONMENT=development
+      # --- Ollama cloud (recommended) ---
+      # Point at Ollama's cloud API and use a :cloud model.
+      # Get a key at: https://ollama.com/settings/keys
+      - OLLAMA_BASE_URL=https://ollama.com
+      - OLLAMA_MODEL=llama3.2:cloud
+      # OLLAMA_API_KEY is read from .env (never hardcode secrets in compose files)
     env_file:
+      # .env is git-ignored. Copy .env.example → .env and fill in OLLAMA_API_KEY.
       - .env
     depends_on:
       postgres:
