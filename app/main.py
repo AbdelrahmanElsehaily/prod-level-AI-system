@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.logging_config import setup_logging
 from app.middleware.logging import LoggingMiddleware
-from app.routers import health
+from app.routers import chat, health
 
 import structlog
 
@@ -132,6 +132,9 @@ app.add_middleware(LoggingMiddleware)
 
 # --- Routers ---
 app.include_router(health.router, tags=["Health"])
+# Chat router owns the core product endpoint: POST /chat
+# tags=["Chat"] groups it separately in /docs from infrastructure endpoints.
+app.include_router(chat.router, tags=["Chat"])
 
 
 @app.get("/", tags=["Root"])
