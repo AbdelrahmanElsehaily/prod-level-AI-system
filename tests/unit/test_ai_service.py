@@ -54,7 +54,7 @@ def make_ollama_response(
     content: str = "Hello!",
     prompt_eval_count: int = 10,
     eval_count: int = 5,
-    model: str = "llama3.2",
+    model: str = "llama3.2:cloud",
 ) -> MagicMock:
     """
     Build a mock that looks like an ollama chat() response.
@@ -165,7 +165,7 @@ class TestGetAiReply:
         assert result.reply == "Paris is the capital of France."
         assert result.tokens_used == 7        # output tokens only (eval_count)
         assert result.total_tokens == 15      # input + output (8 + 7)
-        assert result.model == "llama3.2"
+        assert result.model == "llama3.2:cloud"
 
     @pytest.mark.asyncio
     async def test_raises_ai_service_error_on_response_error(self) -> None:
