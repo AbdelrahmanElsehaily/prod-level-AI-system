@@ -10,10 +10,21 @@ Why isolate the provider here?
   because they depend on this module's interface, not on Ollama directly.
 
 How Ollama works
-  Ollama is a local model runner. It downloads open-source models (Llama, Mistral,
-  Gemma, etc.) and serves them via a REST API at http://localhost:11434.
+  Ollama can run in two modes, both using the same Python client and API format:
 
-  The Python client wraps that REST API. We use AsyncClient (not the sync Client)
+  Local mode (default):
+    Ollama runs on your machine and serves models via http://localhost:11434.
+    No API key required. Models must be pulled first: `ollama pull llama3.2`.
+
+  Cloud mode (Ollama cloud — launched Sep 2025):
+    Models run on Ollama's GPU infrastructure. Set:
+      OLLAMA_BASE_URL=https://ollama.com
+      OLLAMA_MODEL=llama3.2:cloud   (note the :cloud suffix)
+      OLLAMA_API_KEY=<key from ollama.com/settings/keys>
+    No local GPU or model download required.
+    Full model list: https://ollama.com/search?c=cloud
+
+  The Python client wraps the REST API. We use AsyncClient (not the sync Client)
   because our FastAPI app runs on an async event loop — a blocking (sync) HTTP call
   to Ollama inside an async route would freeze the event loop and prevent all other
   requests from being handled until the model responds.
@@ -130,12 +141,22 @@ async def get_ai_reply(
     """
     messages = _messages_to_ollama_format(history, new_user_message)
 
-    # Create a new AsyncClient per call rather than a module-level singleton.
-    # Reason: Ollama's AsyncClient does not maintain persistent connections —
-    # each call opens and closes an HTTP connection anyway. A module-level
-    # client would not provide connection pooling benefits here, and would
-    # complicate testing (harder to mock).
-    client = ollama.AsyncClient(host=settings.ollama_base_url)
+    # Build request headers.
+    # For Ollama cloud, an API key is required and sent as a Bearer token.
+    # For local Ollama, no Authorization header is needed — omitting it
+    # entirely avoids any chance of a local Ollama build rejecting it.
+    headers: dict[str, str] = {}
+    if settings.ollama_api_key:
+        headers["Authorization"] = f"Bearer {settings.ollama_api_key}"
+
+    # Create a new AsyncClient per call.
+    # Ollama's AsyncClient does not maintain persistent connections — each
+    # call opens and closes an HTTP connection anyway, so a module-level
+    # singleton provides no benefit and would complicate testing.
+    client = ollama.AsyncClient(
+        host=settings.ollama_base_url,
+        headers=headers,
+    )
 
     start_time = time.monotonic()
 
