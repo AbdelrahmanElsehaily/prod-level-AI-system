@@ -42,21 +42,27 @@ class Settings(BaseSettings):
     # It exposes a REST API — no cloud account, no API key, no usage costs.
     #
     # ollama_base_url: where the Ollama server is listening.
-    #   - Local dev:   http://localhost:11434   (default)
+    #   - Local dev:   http://localhost:11434
     #   - Docker:      http://host.docker.internal:11434
-    #                  (host.docker.internal resolves to your Mac's localhost
-    #                   from inside a Docker container — needed because
-    #                   "localhost" inside a container means the container itself,
-    #                   not the host machine where Ollama is running)
-    #   - Remote:      http://<server-ip>:11434
+    #                  (host.docker.internal resolves to your Mac from inside
+    #                   a Docker container — "localhost" inside a container
+    #                   means the container itself, not the host machine)
+    #   - Ollama cloud: https://ollama.com
+    #                  (requires OLLAMA_API_KEY — get one at ollama.com/settings/keys)
     ollama_base_url: str = "http://localhost:11434"
 
-    # ollama_model: which model to run. Must be pulled first with:
-    #   ollama pull llama3.2
-    # Any model available in `ollama list` works here.
-    # Override per-environment without touching code:
-    #   OLLAMA_MODEL=mistral docker compose up
+    # ollama_model: which model to use.
+    #   - Local:  any model pulled with `ollama pull <model>` e.g. "llama3.2"
+    #   - Cloud:  any cloud model tagged with ":cloud" suffix
+    #             e.g. "llama3.2:cloud", "gemma4:cloud", "qwen3:cloud"
+    #             Full list: https://ollama.com/search?c=cloud
     ollama_model: str = "llama3.2"
+
+    # ollama_api_key: required for Ollama cloud models, ignored for local.
+    #   Get a key at: https://ollama.com/settings/keys
+    #   The key is sent as a Bearer token in the Authorization header.
+    #   Leave unset for local Ollama (no auth needed).
+    ollama_api_key: str | None = None
 
     # --- Observability ---
     # Optional — Sentry is only initialised if this is set (Step 8).
