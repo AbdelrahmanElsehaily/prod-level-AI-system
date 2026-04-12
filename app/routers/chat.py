@@ -91,7 +91,7 @@ async def chat(
             conversation_id = uuid.UUID(request.conversation_id)
         except ValueError:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="conversation_id must be a valid UUID",
             )
 
