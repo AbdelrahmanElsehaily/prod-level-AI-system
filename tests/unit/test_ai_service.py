@@ -150,6 +150,7 @@ class TestGetAiReply:
             content="Paris is the capital of France.",
             prompt_eval_count=8,
             eval_count=7,
+            model="llama3.2:cloud"
         )
 
         with patch("app.services.ai.ollama.AsyncClient") as MockClient:
