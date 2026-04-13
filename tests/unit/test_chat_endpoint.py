@@ -69,7 +69,7 @@ def make_mock_ai_response(
     reply: str = "Hello! How can I help?",
     tokens_used: int = 5,
     total_tokens: int = 15,
-    model: str = "llama3.2",
+    model: str = "llama3.2:cloud",
 ) -> AIResponse:
     return AIResponse(
         reply=reply,
@@ -129,7 +129,7 @@ class TestChatEndpoint:
 
         assert data["reply"] == "Hello! How can I help?"
         assert data["tokens_used"] == 15
-        assert data["model"] == "llama3.2"
+        assert data["model"] == "llama3.2:cloud"
 
         # conversation_id must be a valid UUID (auto-created)
         uuid.UUID(data["conversation_id"])  # raises ValueError if invalid
