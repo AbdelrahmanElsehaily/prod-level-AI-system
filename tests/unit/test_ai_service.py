@@ -166,6 +166,7 @@ class TestGetAiReply:
         assert result.reply == "Paris is the capital of France."
         assert result.tokens_used == 7        # output tokens only (eval_count)
         assert result.total_tokens == 15      # input + output (8 + 7)
+        print("result: ",result)
         assert result.model == "llama3.2:cloud"
 
     @pytest.mark.asyncio
