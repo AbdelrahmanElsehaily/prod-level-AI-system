@@ -9,6 +9,7 @@ This file creates the FastAPI app instance and wires everything together:
 No business logic lives here — that belongs in routers/ and services/.
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
@@ -29,7 +30,13 @@ logger = structlog.get_logger(__name__)
 
 def run_migrations() -> None:
     """
-    Apply all pending Alembic migrations synchronously at startup.
+    Apply all pending Alembic migrations.
+
+    This function is intentionally synchronous. It is called from the async
+    lifespan via asyncio.get_event_loop().run_in_executor(), which runs it
+    in a worker thread. That thread has no running event loop, which lets
+    migrations/env.py call asyncio.run() safely to drive the async Alembic
+    runner (see the lifespan comment for the full explanation).
 
     Why run migrations at startup?
       In production every new deployment may include schema changes. Running
@@ -39,17 +46,7 @@ def run_migrations() -> None:
           rolls back → no traffic served against the wrong schema
         - No manual `alembic upgrade head` step needed in the deploy pipeline
 
-    Why synchronous?
-      Alembic is synchronous by design (it uses psycopg2 / sync connections
-      internally via our env.py setup). We call it here before the async event
-      loop handles any requests — there's no concurrency conflict.
-
     Why skip in test environment?
-      migrations/env.py calls asyncio.run() to drive the async Alembic runner.
-      Unit tests run inside pytest-asyncio's event loop, and asyncio.run()
-      cannot be called from within a running event loop — it raises:
-          RuntimeError: asyncio.run() cannot be called from a running event loop
-
       Unit tests mock the database entirely (via dependency_overrides), so there
       is no real Postgres to migrate against. Skipping is correct behaviour,
       not a workaround — we are not testing migrations here.
@@ -58,11 +55,6 @@ def run_migrations() -> None:
       DO need migrations applied. They handle that by setting ENVIRONMENT to
       anything other than "test", or by calling alembic upgrade head directly
       in the CI service container setup step.
-
-    In production (Railway), the railway.toml start command runs:
-        alembic upgrade head && uvicorn app.main:app ...
-    meaning migrations run BEFORE the process even starts. This function is
-    the local-dev / Docker equivalent so `docker compose up` also works.
     """
     if settings.environment == "test":
         # No real DB in unit tests — all DB calls are mocked via
@@ -94,11 +86,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 1. Configure structured logging before anything else logs.
     setup_logging()
 
-    # 2. Run database migrations.
-    #    This is synchronous and blocks briefly at startup — acceptable because
-    #    it runs once, before the event loop accepts any requests.
+    # 2. Run database migrations in a thread-pool executor.
+    #
+    #    Why a thread executor instead of a plain call?
+    #
+    #    migrations/env.py ends with:
+    #        asyncio.run(run_migrations_online())
+    #
+    #    asyncio.run() creates a BRAND NEW event loop. If called from a thread
+    #    that already has a running loop (uvicorn's), Python raises:
+    #        RuntimeError: asyncio.run() cannot be called from a running event loop
+    #
+    #    run_in_executor(None, ...) offloads the call to a worker thread from
+    #    the default ThreadPoolExecutor. That thread has NO running event loop,
+    #    so asyncio.run() inside env.py can safely create one there.
+    #
+    #    The await here suspends the lifespan coroutine until the worker thread
+    #    finishes — migrations complete before any request is served.
     await logger.ainfo("running database migrations")
-    run_migrations()
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, run_migrations)
     await logger.ainfo("database migrations complete")
 
     # 3. Create the shared Redis connection pool.
