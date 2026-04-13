@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     #   - Cloud:  any cloud model tagged with ":cloud" suffix
     #             e.g. "llama3.2:cloud", "gemma4:cloud", "qwen3:cloud"
     #             Full list: https://ollama.com/search?c=cloud
-    ollama_model: str = "llama3.2"
+    ollama_model: str = "llama3.2:cloud"
 
     # ollama_api_key: required for Ollama cloud models, ignored for local.
     #   Get a key at: https://ollama.com/settings/keys
