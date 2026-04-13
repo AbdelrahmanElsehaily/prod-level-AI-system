@@ -63,6 +63,11 @@ class MessageRole(str, enum.Enum):
         the DB layer, not silently stored as bad data.
       - Inheriting from str means the values can be used directly as strings
         in Python: MessageRole.USER == "user" → True. No need to call .value.
+
+    Why lowercase values ("user", not "USER")?
+      Postgres enum values are case-sensitive strings. Lowercase is the
+      conventional choice — it matches the OpenAI/Ollama message format
+      ("role": "user") so no conversion is needed when building API payloads.
     """
     USER = "user"
     ASSISTANT = "assistant"
@@ -163,7 +168,21 @@ class Message(Base):
     role: Mapped[MessageRole] = mapped_column(
         # SQLAlchemy maps Python's MessageRole enum to a Postgres ENUM type.
         # The enum is created in the database during migration.
-        Enum(MessageRole, name="message_role"),
+        #
+        # Why values_callable?
+        #   By default, SQLAlchemy uses the enum member's .name ("USER",
+        #   "ASSISTANT") as the stored string — not the .value ("user",
+        #   "assistant"). This mismatch would cause:
+        #       invalid input value for enum message_role: "USER"
+        #   because the Postgres ENUM type was created with lowercase labels.
+        #
+        #   values_callable overrides this so SQLAlchemy stores e.value ("user",
+        #   "assistant") which matches the labels in the Postgres ENUM type.
+        Enum(
+            MessageRole,
+            name="message_role",
+            values_callable=lambda obj: [e.value for e in obj],
+        ),
         nullable=False,
     )
 
