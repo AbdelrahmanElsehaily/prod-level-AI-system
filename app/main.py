@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.logging_config import setup_logging
 from app.middleware.logging import LoggingMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware
 from app.routers import chat, health
 
 import structlog
@@ -132,10 +133,19 @@ app = FastAPI(
 
 # --- Middleware ---
 # add_middleware() calls form a STACK: last added = first to run on requests.
-# Current order (first to run → last):
-#   1. LoggingMiddleware — attaches request_id, logs request start/end
-# Step 6 adds RateLimitMiddleware before LoggingMiddleware.
+#
+# Starlette processes middleware in REVERSE registration order:
+#   last added → runs FIRST (outermost layer)
+#   first added → runs LAST (innermost layer, closest to the route)
+#
+# We want:
+#   RateLimitMiddleware (outermost) → reject over-limit requests before logging
+#   LoggingMiddleware (innermost)   → log only requests that pass rate limit
+#
+# To achieve this order we register LoggingMiddleware FIRST, then RateLimitMiddleware.
+# The last-registered middleware wraps all the others.
 app.add_middleware(LoggingMiddleware)
+app.add_middleware(RateLimitMiddleware)
 
 # --- Routers ---
 app.include_router(health.router, tags=["Health"])
