@@ -28,10 +28,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
 from app.main import app
-from app.models.database import Conversation, Message, MessageRole
-from app.services.ai import AIResponse
+from app.models.database import Conversation, Message
 from app.models.schemas import AIServiceError
-
+from app.services.ai import AIResponse
 
 # ---------------------------------------------------------------------------
 # Fixtures

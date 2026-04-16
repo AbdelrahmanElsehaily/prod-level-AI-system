@@ -33,7 +33,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -53,7 +53,7 @@ class Base(DeclarativeBase):
     pass
 
 
-class MessageRole(str, enum.Enum):
+class MessageRole(enum.StrEnum):
     """
     Postgres ENUM type for the role of a message in a conversation.
 
@@ -61,14 +61,16 @@ class MessageRole(str, enum.Enum):
       - Database-level constraint: Postgres rejects any value not in the enum.
         A bug that writes role="bot" instead of role="assistant" is caught at
         the DB layer, not silently stored as bad data.
-      - Inheriting from str means the values can be used directly as strings
-        in Python: MessageRole.USER == "user" → True. No need to call .value.
+      - StrEnum (Python 3.11+) combines str and Enum: values are used directly
+        as strings in Python — MessageRole.USER == "user" → True. No .value needed.
+        Ruff prefers StrEnum over (str, enum.Enum) for the same behaviour.
 
     Why lowercase values ("user", not "USER")?
       Postgres enum values are case-sensitive strings. Lowercase is the
       conventional choice — it matches the OpenAI/Ollama message format
       ("role": "user") so no conversion is needed when building API payloads.
     """
+
     USER = "user"
     ASSISTANT = "assistant"
 

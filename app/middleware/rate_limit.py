@@ -89,7 +89,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: object) -> Response:
         # Fast path: never rate-limit excluded endpoints.
         if request.url.path in _EXCLUDED_PATHS:
-            return await call_next(request)  # type: ignore[operator]
+            return await call_next(request)  # type: ignore[operator,no-any-return]
 
         # --- Identify the client ---
         # X-Forwarded-For is set by Railway's load balancer and contains the
@@ -107,7 +107,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # bad than the entire API being down.
         redis = getattr(request.app.state, "redis", None)
         if redis is None:
-            return await call_next(request)  # type: ignore[operator]
+            return await call_next(request)  # type: ignore[operator,no-any-return]
 
         # --- Sliding window check ---
         redis_key = f"rate_limit:{client_ip}"
@@ -159,7 +159,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 client_ip=client_ip,
                 error=str(exc),
             )
-            return await call_next(request)  # type: ignore[operator]
+            return await call_next(request)  # type: ignore[operator,no-any-return]
 
         # --- Compute header values ---
         remaining = max(0, RATE_LIMIT - current_count - 1)

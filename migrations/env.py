@@ -43,6 +43,7 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import settings
+
 # Import Base (and all models by extension) so Alembic's autogenerate can
 # see the full schema. Without this import, `alembic revision --autogenerate`
 # would produce empty migration files because it can't find any tables.

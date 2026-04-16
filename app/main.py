@@ -10,10 +10,11 @@ No business logic lives here — that belongs in routers/ and services/.
 """
 
 import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 import redis.asyncio as aioredis
+import structlog
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI
@@ -23,8 +24,6 @@ from app.logging_config import setup_logging
 from app.middleware.logging import LoggingMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.routers import chat, health
-
-import structlog
 
 logger = structlog.get_logger(__name__)
 

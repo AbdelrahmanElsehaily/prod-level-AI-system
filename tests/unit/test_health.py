@@ -23,13 +23,11 @@ How dependency_overrides works:
 from collections.abc import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db, get_redis
 from app.main import app
-
 
 # ---------------------------------------------------------------------------
 # Mock factories

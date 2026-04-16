@@ -81,7 +81,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: object) -> Response:
         # Skip logging for health/metrics endpoints to reduce log noise.
         if request.url.path in _EXCLUDED_PATHS:
-            return await call_next(request)  # type: ignore[operator]
+            return await call_next(request)  # type: ignore[operator,no-any-return]
 
         # --- Generate request_id ---
         # UUID4 is randomly generated — statistically impossible to collide.

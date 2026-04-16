@@ -163,7 +163,7 @@ async def get_ai_reply(
     try:
         response = await client.chat(
             model=settings.ollama_model,
-            messages=messages,  # type: ignore[arg-type]
+            messages=messages,  # type: ignore[arg-type,unused-ignore]
         )
     except ollama.ResponseError as exc:
         # ResponseError: Ollama is running but returned an error (e.g. model
