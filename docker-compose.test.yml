@@ -1,0 +1,82 @@
+# docker-compose.test.yml — CI-only compose file
+# =================================================
+# Used by the CI build job to spin up the app and verify it starts cleanly.
+# This is intentionally slimmer than docker-compose.yml:
+#
+#   - No volume mounts: the image is self-contained (code baked in at build time)
+#   - No hot reload: we test the production image, not a dev server
+#   - No named volumes for postgres data: CI starts fresh every run
+#   - healthcheck on the api service: lets the build job wait until the app is
+#     actually ready before running the smoke test curl against /health
+#
+# Why a separate file instead of reusing docker-compose.yml?
+#   docker-compose.yml is optimised for local development:
+#     - Volume mounts let you edit code without rebuilding
+#     - OLLAMA_API_KEY is read from a .env file on your machine
+#   Neither of those is appropriate in CI:
+#     - Volume mounts would overwrite the built image with the host filesystem
+#     - .env doesn't exist in CI — secrets come from GitHub Actions secrets
+#
+# Usage (in CI):
+#   docker compose -f docker-compose.test.yml up --build -d
+#   docker compose -f docker-compose.test.yml ps   # verify all healthy
+#   curl http://localhost:8000/health               # smoke test
+#   docker compose -f docker-compose.test.yml down
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: chatapi
+    # No ports exposed to the host — the api service reaches postgres by
+    # service name ("postgres") on the internal Docker network.
+    # Exposing ports would risk colliding with a Postgres already running locally.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Point at the service names — Docker Compose's internal DNS resolves
+      # "postgres" and "redis" to the containers above.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/chatapi
+      REDIS_URL: redis://redis:6379
+      # "ci" environment: JSON logging + migrations run on startup.
+      # Not "test" (which skips migrations) and not "production" (which would
+      # expect real secrets we don't have in this test compose).
+      ENVIRONMENT: ci
+      # OLLAMA_API_KEY is intentionally omitted — the smoke test only hits
+      # /health (no AI calls), so no key is needed.
+      OLLAMA_BASE_URL: http://localhost:11434
+      OLLAMA_MODEL: llama3.2:cloud
+    depends_on:
+      postgres:
+        condition: service_healthy  # wait for pg_isready before starting the api
+      redis:
+        condition: service_healthy  # wait for redis-cli ping before starting the api
+    healthcheck:
+      # Curl /health every 5 seconds. The build job waits for this to pass
+      # before running the smoke test, so we know migrations ran and the app
+      # is accepting connections — not just that the process started.
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12  # 60 seconds total — enough for migrations on a cold DB
+      start_period: 10s
