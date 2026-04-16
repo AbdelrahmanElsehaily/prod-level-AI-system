@@ -77,7 +77,7 @@ async def health_check(
     # redis-py's .ping() sends the PING command. Redis replies with PONG.
     # Same principle as SELECT 1 — proves connection + process are alive.
     try:
-        await redis_client.ping()
+        await redis_client.ping()  # type: ignore[misc]
         checks["redis"] = "ok"
     except Exception as exc:
         checks["redis"] = f"error: {exc}"

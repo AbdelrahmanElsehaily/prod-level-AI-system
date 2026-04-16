@@ -119,7 +119,9 @@ class TestLoggingMiddleware:
         # We need to mock DB and Redis for /health to return 200
         # Reuse the dependency override pattern from test_health.py
         from unittest.mock import AsyncMock, MagicMock
+
         from sqlalchemy.ext.asyncio import AsyncSession
+
         from app.dependencies import get_db, get_redis
 
         mock_db = MagicMock(spec=AsyncSession)

@@ -33,7 +33,7 @@ Concurrency note
 import uuid
 
 import structlog
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 
 from app.dependencies import DB
 from app.models.database import MessageRole

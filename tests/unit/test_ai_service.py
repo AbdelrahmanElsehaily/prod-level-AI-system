@@ -35,8 +35,7 @@ import pytest
 
 from app.models.database import Message, MessageRole
 from app.models.schemas import AIServiceError
-from app.services.ai import AIResponse, get_ai_reply, _messages_to_ollama_format
-
+from app.services.ai import AIResponse, _messages_to_ollama_format, get_ai_reply
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -153,8 +152,8 @@ class TestGetAiReply:
             model="llama3.2:cloud"
         )
 
-        with patch("app.services.ai.ollama.AsyncClient") as MockClient:
-            MockClient.return_value.chat = AsyncMock(return_value=mock_response)
+        with patch("app.services.ai.ollama.AsyncClient") as mock_client:
+            mock_client.return_value.chat = AsyncMock(return_value=mock_response)
 
             result = await get_ai_reply(
                 history=[],
@@ -182,8 +181,8 @@ class TestGetAiReply:
         """
         import ollama as ollama_pkg
 
-        with patch("app.services.ai.ollama.AsyncClient") as MockClient:
-            MockClient.return_value.chat = AsyncMock(
+        with patch("app.services.ai.ollama.AsyncClient") as mock_client:
+            mock_client.return_value.chat = AsyncMock(
                 side_effect=ollama_pkg.ResponseError("model 'llama3.2' not found")
             )
 
@@ -206,8 +205,8 @@ class TestGetAiReply:
         Without this translation, a raw ConnectionRefusedError would propagate
         to the HTTP layer and cause an unhandled 500 instead of a clean 503.
         """
-        with patch("app.services.ai.ollama.AsyncClient") as MockClient:
-            MockClient.return_value.chat = AsyncMock(
+        with patch("app.services.ai.ollama.AsyncClient") as mock_client:
+            mock_client.return_value.chat = AsyncMock(
                 side_effect=ConnectionRefusedError("Connection refused")
             )
 
@@ -236,9 +235,9 @@ class TestGetAiReply:
         ]
         mock_response = make_ollama_response()
 
-        with patch("app.services.ai.ollama.AsyncClient") as MockClient:
+        with patch("app.services.ai.ollama.AsyncClient") as mock_client:
             mock_chat = AsyncMock(return_value=mock_response)
-            MockClient.return_value.chat = mock_chat
+            mock_client.return_value.chat = mock_chat
 
             await get_ai_reply(
                 history=history,
