@@ -16,74 +16,84 @@ on:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Job 1: unit-tests
+  # Job 1: lint
   # ---------------------------------------------------------------------------
-  # Runs fast, in-memory tests with no external services.
-  # If this fails there is no point running the slower integration tests.
-  unit-tests:
-    name: Unit Tests
-    # ubuntu-latest is GitHub's standard Linux runner.
-    # It's a fresh VM for every run — no state bleeds between runs.
+  # Fast static analysis — no services, no DB, no network.
+  # Runs first because it's the cheapest check. If the code has syntax errors,
+  # import issues, or type violations, there's no point spinning up Postgres.
+  #
+  # Three tools in order:
+  #   ruff check  — linting (unused imports, naming conventions, code style)
+  #   ruff format — formatting (consistent indentation, quote style, line wraps)
+  #   mypy        — static type checking (catches type mismatches at CI time,
+  #                 not at runtime when a user hits the bug)
+  lint:
+    name: Lint & Type Check
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Check out the branch that triggered the PR.
-      # Without this step the runner has an empty workspace.
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Install uv — the package manager for this project.
-      #
-      # Why uv instead of pip?
-      #   uv is a Rust-based package manager from Astral (same team as ruff).
-      #   It resolves and installs packages 10-100x faster than pip because:
-      #     - Dependency resolution runs in Rust (not Python)
-      #     - It has a global cache shared across projects and CI runs
-      #     - It reads uv.lock (our committed lockfile) directly — no re-solving
-      #
-      # enable-cache: true → the action caches uv's global package cache in
-      # GitHub Actions cache between runs. If uv.lock hasn't changed, the next
-      # run restores all packages from cache in ~2 seconds instead of downloading.
-      #
-      # python-version: reads .python-version automatically when not specified,
-      # but we set it explicitly here so the CI job self-documents its requirement.
       - name: Set up uv
         uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
           python-version: "3.12"
 
-      # Step 3: Install all project dependencies from the lockfile.
-      #
-      # `uv sync` reads uv.lock and installs the EXACT pinned versions —
-      # not "resolve and install", just "install what the lockfile says".
-      # This is reproducible: CI always gets the same packages as local dev.
-      #
-      # --all-extras installs both runtime deps AND the [dev] group
-      # (pytest, ruff, mypy, etc.) which are needed to run tests.
-      #
-      # uv also creates and manages the virtual environment automatically —
-      # no need to manually activate a venv before running commands.
       - name: Install dependencies
         run: uv sync --all-extras
 
-      # Step 4: Run only the unit tests.
-      #
-      # `uv run` executes the command inside the project's virtual environment
-      # that `uv sync` set up — no need to activate it manually.
-      #
-      # -v         → verbose: show each test name as it runs
-      # --tb=short → on failure, show a compact traceback (not the full wall of text)
-      #
+      # ruff check: linting rules (E, F, I, N, W, UP — see pyproject.toml)
+      # --output-format=github formats errors as GitHub annotations that appear
+      # inline on the PR diff — engineers see the error next to the offending line.
+      - name: Lint with ruff
+        run: uv run ruff check . --output-format=github
+
+      # ruff format --check: exits non-zero if any file would be reformatted.
+      # Does NOT modify files — just reports what needs changing.
+      # This enforces consistent formatting without a pre-commit hook in CI.
+      - name: Check formatting with ruff
+        run: uv run ruff format --check .
+
+      # mypy: static type checking with strict mode (see pyproject.toml).
+      # We only check app/ — tests use MagicMock extensively which mypy struggles
+      # with in strict mode, and catching type errors in production code is the goal.
+      - name: Type check with mypy
+        run: uv run mypy app/
+
+  # ---------------------------------------------------------------------------
+  # Job 2: unit-tests
+  # ---------------------------------------------------------------------------
+  # Runs fast, in-memory tests with no external services.
+  # Needs lint to pass first — no point running tests if the code won't parse.
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: [lint]  # Only run if lint passes
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
       # Unit tests need NO environment variables — all dependencies are mocked.
       - name: Run unit tests
         run: uv run pytest tests/unit/ -v --tb=short
 
   # ---------------------------------------------------------------------------
-  # Job 2: integration-tests
+  # Job 3: integration-tests
   # ---------------------------------------------------------------------------
   # Runs tests that require REAL Postgres and Redis.
-  # The Anthropic API is still mocked — we never make real AI calls in tests.
+  # The AI provider (Ollama) is still mocked — we never make real AI calls in tests.
   #
   # `needs: [unit-tests]` means this job only starts after unit-tests passes.
   # Why gate it? Integration tests spin up Docker services and take longer.
@@ -91,12 +101,11 @@ jobs:
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
-    needs: [unit-tests]  # Only run if unit tests pass
+    needs: [unit-tests]
 
     # Service containers: GitHub spins these up as Docker containers BEFORE
     # any steps run. They share a Docker network with the runner, so your code
     # reaches them at localhost:<port> — exactly like local dev.
-    # GitHub tears them down automatically when the job finishes.
     services:
       postgres:
         image: postgres:16-alpine
@@ -106,10 +115,6 @@ jobs:
           POSTGRES_DB: chatapi
         ports:
           - 5432:5432
-        # options is passed verbatim to `docker create` — no comments allowed
-        # inside this block. YAML's >- folded scalar collapses every line
-        # (including comment lines) into a single space-separated string, so
-        # a # comment becomes a literal argument to docker and fails the command.
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -126,15 +131,9 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-    # Environment variables available to ALL steps in this job.
-    # These mirror what docker-compose.yml sets for local dev, but point to
-    # the service containers above (which are reachable at localhost).
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/chatapi
       REDIS_URL: redis://localhost:6379
-      # "ci" triggers JSON logging and runs migrations on startup.
-      # Do NOT use "test" here — that skips migrations, so the DB tables
-      # would not exist and all integration tests would fail.
       ENVIRONMENT: ci
 
     steps:
@@ -150,20 +149,84 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras
 
-      # Run integration tests.
-      #
-      # The `|| [ $? -eq 5 ]` at the end handles pytest exit code 5, which
-      # means "no tests were collected". Right now tests/integration/ has no
-      # test files — they are added in Steps 4 and 5. Without this, CI would
-      # fail with "no tests found" even though nothing is actually broken.
-      #
-      # Exit code semantics:
-      #   0 → all tests passed           ✅ CI passes
-      #   1 → tests ran, some failed     ❌ CI fails (real failure)
-      #   2 → interrupted / bad usage    ❌ CI fails
-      #   5 → no tests collected         ✅ treated as pass (temporarily)
-      #
-      # Once real integration tests exist, exit code 5 will never occur
-      # and this workaround becomes invisible.
+      # `|| [ $? -eq 5 ]` treats "no tests collected" (exit code 5) as a pass.
+      # integration/ has no test files yet — they will be added as needed.
       - name: Run integration tests
         run: uv run pytest tests/integration/ -v --tb=short || [ $? -eq 5 ]
+
+  # ---------------------------------------------------------------------------
+  # Job 4: build
+  # ---------------------------------------------------------------------------
+  # Builds the production Docker image and runs a smoke test against /health.
+  # This catches problems that only appear in the containerised environment:
+  #   - Missing files not included by Dockerfile COPY
+  #   - Import errors that only surface when the full image runs
+  #   - Migration failures against a real Postgres
+  #   - Startup crashes that unit tests (which mock everything) would never see
+  #
+  # Runs after integration-tests — we want all tests green before spending
+  # time on a Docker build.
+  build:
+    name: Docker Build & Smoke Test
+    runs-on: ubuntu-latest
+    needs: [integration-tests]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # docker compose is available on ubuntu-latest runners by default.
+      # We use docker-compose.test.yml (not docker-compose.yml) which:
+      #   - Builds the image from the Dockerfile
+      #   - Starts Postgres, Redis, and the API
+      #   - Has a healthcheck on the API container so we can wait for readiness
+      - name: Build and start services
+        run: docker compose -f docker-compose.test.yml up --build -d
+
+      # Wait until the api container's healthcheck reports "healthy".
+      # The healthcheck pings /health every 5s with up to 12 retries (60s total).
+      # Without this wait, the curl below might hit the container before uvicorn
+      # has finished starting or before migrations have completed.
+      - name: Wait for API to be healthy
+        run: |
+          echo "Waiting for API container to become healthy..."
+          for i in $(seq 1 24); do
+            STATUS=$(docker inspect --format='{{.State.Health.Status}}' \
+              $(docker compose -f docker-compose.test.yml ps -q api) 2>/dev/null || echo "starting")
+            echo "  Attempt $i/24: status = $STATUS"
+            if [ "$STATUS" = "healthy" ]; then
+              echo "API is healthy!"
+              break
+            fi
+            if [ $i -eq 24 ]; then
+              echo "API failed to become healthy after 120 seconds"
+              docker compose -f docker-compose.test.yml logs api
+              exit 1
+            fi
+            sleep 5
+          done
+
+      # Smoke test: a real HTTP request to /health confirms:
+      #   1. The container started without crashing
+      #   2. Migrations ran successfully (tables exist)
+      #   3. The app can connect to Postgres and Redis
+      #   4. The response is valid JSON with status=healthy
+      #
+      # -sf: silent mode + fail on non-2xx status codes.
+      # If /health returns 503 (degraded), curl exits non-zero and CI fails.
+      - name: Smoke test — GET /health returns 200
+        run: |
+          RESPONSE=$(curl -sf http://localhost:8000/health)
+          echo "Response: $RESPONSE"
+          echo "$RESPONSE" | grep -q '"status":"healthy"'
+
+      # Always print logs on failure so we can debug without re-running CI.
+      # `if: failure()` means this step only runs when a previous step failed —
+      # it doesn't run on success (no log noise on green builds).
+      - name: Print container logs on failure
+        if: failure()
+        run: docker compose -f docker-compose.test.yml logs
+
+      - name: Tear down
+        if: always()  # run even if earlier steps failed — clean up the runner
+        run: docker compose -f docker-compose.test.yml down -v
