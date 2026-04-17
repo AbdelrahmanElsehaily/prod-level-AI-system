@@ -36,6 +36,7 @@ from app.services.ai import AIResponse
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def make_mock_db() -> AsyncSession:
     """
     A mock AsyncSession that simulates successful DB operations.
@@ -99,8 +100,8 @@ def client_with_mocks():
 # Tests
 # ---------------------------------------------------------------------------
 
-class TestChatEndpoint:
 
+class TestChatEndpoint:
     def test_new_conversation_returns_valid_response(
         self, client_with_mocks: tuple
     ) -> None:
@@ -133,9 +134,7 @@ class TestChatEndpoint:
         # conversation_id must be a valid UUID (auto-created)
         uuid.UUID(data["conversation_id"])  # raises ValueError if invalid
 
-    def test_new_conversation_id_is_returned(
-        self, client_with_mocks: tuple
-    ) -> None:
+    def test_new_conversation_id_is_returned(self, client_with_mocks: tuple) -> None:
         """
         GIVEN: No conversation_id in request
         WHEN:  POST /chat is called
@@ -157,9 +156,7 @@ class TestChatEndpoint:
         assert conv_id is not None
         assert len(conv_id) > 0
 
-    def test_missing_message_returns_422(
-        self, client_with_mocks: tuple
-    ) -> None:
+    def test_missing_message_returns_422(self, client_with_mocks: tuple) -> None:
         """
         GIVEN: Request body with no message field
         WHEN:  POST /chat is called
@@ -175,9 +172,7 @@ class TestChatEndpoint:
 
         assert response.status_code == 422
 
-    def test_empty_message_returns_422(
-        self, client_with_mocks: tuple
-    ) -> None:
+    def test_empty_message_returns_422(self, client_with_mocks: tuple) -> None:
         """
         GIVEN: Request with message="" (empty string)
         WHEN:  POST /chat is called
@@ -211,9 +206,7 @@ class TestChatEndpoint:
 
         assert response.status_code == 422
 
-    def test_ai_service_failure_returns_503(
-        self, client_with_mocks: tuple
-    ) -> None:
+    def test_ai_service_failure_returns_503(self, client_with_mocks: tuple) -> None:
         """
         GIVEN: Ollama is down (get_ai_reply raises AIServiceError)
         WHEN:  POST /chat is called

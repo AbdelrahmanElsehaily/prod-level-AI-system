@@ -82,15 +82,11 @@ class ChatResponse(BaseModel):
     conversation_id: str = Field(
         description="ID of the conversation. Store this and send it back to continue."
     )
-    reply: str = Field(
-        description="The assistant's response text."
-    )
+    reply: str = Field(description="The assistant's response text.")
     tokens_used: int = Field(
         description="Total tokens used (prompt + completion) for this exchange."
     )
-    model: str = Field(
-        description="The model that generated this response."
-    )
+    model: str = Field(description="The model that generated this response.")
 
 
 class AIServiceError(Exception):

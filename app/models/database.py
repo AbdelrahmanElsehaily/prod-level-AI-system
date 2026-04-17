@@ -50,6 +50,7 @@ class Base(DeclarativeBase):
     We define it here rather than in a separate file so all models can import
     from one place: `from app.models.database import Base, Conversation, Message`
     """
+
     pass
 
 
@@ -88,6 +89,7 @@ class Conversation(Base):
       created_at — when the conversation started (set once, never updated)
       updated_at — when the last message was added (auto-updated by Postgres)
     """
+
     __tablename__ = "conversations"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -147,6 +149,7 @@ class Message(Base):
                         responses do). Used for cost tracking and Langfuse tracing.
       created_at      — when the message was created
     """
+
     __tablename__ = "messages"
 
     id: Mapped[uuid.UUID] = mapped_column(

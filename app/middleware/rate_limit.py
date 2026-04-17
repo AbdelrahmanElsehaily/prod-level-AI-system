@@ -95,10 +95,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # X-Forwarded-For is set by Railway's load balancer and contains the
         # real client IP. Without this, every request appears to come from the
         # load balancer's IP and everyone shares one rate limit counter.
-        client_ip = (
-            request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-            or (request.client.host if request.client else "unknown")
-        )
+        client_ip = request.headers.get("x-forwarded-for", "").split(",")[
+            0
+        ].strip() or (request.client.host if request.client else "unknown")
 
         # --- Get the Redis client ---
         # Stored on app.state by the lifespan in main.py.

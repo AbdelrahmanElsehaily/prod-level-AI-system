@@ -71,19 +71,15 @@ def setup_logging() -> None:
         # automatically — the middleware binds it once, and every log call
         # within that request picks it up from context.
         structlog.contextvars.merge_contextvars,
-
         # add_log_level: adds {"level": "info"} / {"level": "error"} etc.
         structlog.stdlib.add_log_level,
-
         # add_logger_name: adds {"logger": "app.routers.health"} so you can
         # tell which module emitted the log line.
         structlog.stdlib.add_logger_name,
-
         # TimeStamper: adds {"timestamp": "2024-01-01T12:00:00.123456Z"}
         # utc=True ensures all timestamps are in UTC regardless of server timezone.
         # ISO format is standard and parseable by every log aggregator.
         structlog.processors.TimeStamper(fmt="iso", utc=True),
-
         # StackInfoRenderer: if log.exception() is called, this formats the
         # exception traceback as a structured field instead of a raw string.
         structlog.processors.StackInfoRenderer(),
@@ -109,7 +105,6 @@ def setup_logging() -> None:
             # ExceptionRenderer: formats exceptions as a structured "exception"
             # key in the JSON object — not a multi-line string that breaks JSON parsing.
             structlog.processors.ExceptionRenderer(),
-
             # JSONRenderer: serialises the entire event dict to a JSON string.
             structlog.processors.JSONRenderer(),
         ]
@@ -131,12 +126,14 @@ def setup_logging() -> None:
     # Also configure Python's standard logging so libraries like uvicorn,
     # SQLAlchemy, and asyncpg respect our log level setting.
     logging.basicConfig(
-        format="%(message)s",   # structlog handles formatting; stdlib just passes through
+        format="%(message)s",  # structlog handles formatting; stdlib just passes through
         stream=sys.stdout,
         level=logging.INFO,
     )
 
     # Silence overly chatty libraries that would pollute the log output.
     # These are set to WARNING so only real problems surface.
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)  # replaced by our middleware
+    logging.getLogger("uvicorn.access").setLevel(
+        logging.WARNING
+    )  # replaced by our middleware
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)

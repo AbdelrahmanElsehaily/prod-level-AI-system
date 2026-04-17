@@ -82,9 +82,10 @@ class AIResponse:
       model:        The exact model name Ollama used. Useful when
                     OLLAMA_MODEL changes between deploys.
     """
+
     reply: str
-    tokens_used: int       # output tokens — stored per message in DB
-    total_tokens: int      # input + output — returned in HTTP response
+    tokens_used: int  # output tokens — stored per message in DB
+    total_tokens: int  # input + output — returned in HTTP response
     model: str
 
 
@@ -109,10 +110,7 @@ def _messages_to_ollama_format(
       get a confused response because the model doesn't know what "you"
       refers to.
     """
-    messages = [
-        {"role": msg.role.value, "content": msg.content}
-        for msg in history
-    ]
+    messages = [{"role": msg.role.value, "content": msg.content} for msg in history]
     messages.append({"role": "user", "content": new_user_message})
     return messages
 

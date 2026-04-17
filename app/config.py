@@ -29,9 +29,7 @@ class Settings(BaseSettings):
     # --- Database ---
     # asyncpg is the async Postgres driver; SQLAlchemy uses it via the
     # "postgresql+asyncpg://" scheme.
-    database_url: str = (
-        "postgresql+asyncpg://postgres:postgres@localhost:5432/chatapi"
-    )
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/chatapi"
 
     # --- Cache / rate limiting ---
     # Redis is used for rate limiting (Step 6) and response caching (Step 12).
