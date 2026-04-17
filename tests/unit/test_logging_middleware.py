@@ -43,7 +43,6 @@ def client() -> TestClient:
 
 
 class TestLoggingMiddleware:
-
     def test_response_contains_request_id_header(self, client: TestClient) -> None:
         """
         GIVEN: A normal GET request

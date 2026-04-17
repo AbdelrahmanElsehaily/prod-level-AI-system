@@ -33,6 +33,7 @@ from app.main import app
 # Mock factories
 # ---------------------------------------------------------------------------
 
+
 def make_mock_db(raises: Exception | None = None) -> AsyncSession:
     """
     Build a mock AsyncSession that either:
@@ -69,6 +70,7 @@ def make_mock_redis(raises: Exception | None = None) -> MagicMock:
 # We write a small context manager so each test sets up and tears down
 # overrides cleanly without repetition.
 
+
 def override_deps(db_mock: AsyncSession, redis_mock: MagicMock) -> None:
     """Install dependency overrides on the global app."""
 
@@ -90,6 +92,7 @@ def clear_overrides() -> None:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestHealthEndpoint:
     """
@@ -199,7 +202,13 @@ class TestHealthEndpoint:
             response = test_client.get("/health")
             data = response.json()
 
-            required_keys = {"status", "environment", "version", "checks", "response_time_ms"}
+            required_keys = {
+                "status",
+                "environment",
+                "version",
+                "checks",
+                "response_time_ms",
+            }
             assert required_keys.issubset(data.keys()), (
                 f"Missing keys in response: {required_keys - data.keys()}"
             )

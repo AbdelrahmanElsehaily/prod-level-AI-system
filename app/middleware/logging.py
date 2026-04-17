@@ -110,7 +110,9 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         # Convention: X- prefix for custom headers.
 
         # --- Log request arrival ---
-        start_time = time.monotonic()  # monotonic clock: not affected by system time changes
+        start_time = (
+            time.monotonic()
+        )  # monotonic clock: not affected by system time changes
         await logger.ainfo(
             "request started",
             method=request.method,

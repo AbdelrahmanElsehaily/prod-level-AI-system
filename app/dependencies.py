@@ -44,8 +44,8 @@ from app.config import settings
 engine = create_async_engine(
     settings.database_url,
     echo=settings.environment == "development",  # SQL logging in dev only
-    pool_size=5,        # Max connections kept open at all times
-    max_overflow=10,    # Extra connections allowed when pool is exhausted
+    pool_size=5,  # Max connections kept open at all times
+    max_overflow=10,  # Extra connections allowed when pool is exhausted
 )
 
 # async_sessionmaker is a factory that creates new AsyncSession objects.

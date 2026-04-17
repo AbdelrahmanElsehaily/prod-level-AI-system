@@ -52,10 +52,10 @@ def make_mock_db() -> AsyncSession:
     side_effect of refresh().
     """
     db = MagicMock(spec=AsyncSession)
-    db.add = MagicMock()          # synchronous — just registers the object
-    db.flush = AsyncMock()        # async — sends INSERT without committing
-    db.execute = AsyncMock()      # async — runs a SELECT
-    db.refresh = AsyncMock()      # async — re-reads the row from DB
+    db.add = MagicMock()  # synchronous — just registers the object
+    db.flush = AsyncMock()  # async — sends INSERT without committing
+    db.execute = AsyncMock()  # async — runs a SELECT
+    db.refresh = AsyncMock()  # async — re-reads the row from DB
 
     # Simulate what Postgres does on refresh: populate server-generated fields.
     # side_effect receives the argument passed to refresh() (the ORM object)
@@ -69,7 +69,6 @@ def make_mock_db() -> AsyncSession:
 
 
 class TestCreateConversation:
-
     @pytest.mark.asyncio
     async def test_returns_conversation_object(self) -> None:
         """
@@ -115,9 +114,7 @@ class TestCreateConversation:
 
         # Verify order: flush must be called before refresh.
         # call_args_list records every call in order.
-        flush_pos = next(
-            i for i, c in enumerate(db.method_calls) if c == call.flush()
-        )
+        flush_pos = next(i for i, c in enumerate(db.method_calls) if c == call.flush())
         refresh_pos = next(
             i for i, c in enumerate(db.method_calls) if "refresh" in str(c)
         )
@@ -125,7 +122,6 @@ class TestCreateConversation:
 
 
 class TestAddMessage:
-
     @pytest.mark.asyncio
     async def test_user_message_has_no_tokens(self) -> None:
         """
@@ -199,7 +195,6 @@ class TestAddMessage:
 
 
 class TestGetHistory:
-
     @pytest.mark.asyncio
     async def test_returns_messages_in_chronological_order(self) -> None:
         """

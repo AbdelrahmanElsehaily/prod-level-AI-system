@@ -50,7 +50,9 @@ def make_redis_mock(existing_request_count: int) -> MagicMock:
     """
     # Build the pipeline mock — the object returned by redis.pipeline()
     pipe_mock = MagicMock()
-    pipe_mock.zremrangebyscore = MagicMock(return_value=pipe_mock)  # returns self for chaining
+    pipe_mock.zremrangebyscore = MagicMock(
+        return_value=pipe_mock
+    )  # returns self for chaining
     pipe_mock.zcard = MagicMock(return_value=pipe_mock)
     pipe_mock.zadd = MagicMock(return_value=pipe_mock)
     pipe_mock.expire = MagicMock(return_value=pipe_mock)
@@ -60,9 +62,7 @@ def make_redis_mock(existing_request_count: int) -> MagicMock:
     # results[1] = existing count (zcard) — THIS is what the middleware checks
     # results[2] = 1 (zadd added successfully)
     # results[3] = 1 (expire set successfully)
-    pipe_mock.execute = AsyncMock(
-        return_value=[0, existing_request_count, 1, 1]
-    )
+    pipe_mock.execute = AsyncMock(return_value=[0, existing_request_count, 1, 1])
 
     # Build the Redis client mock that returns our pipeline
     redis_mock = MagicMock()
@@ -106,7 +106,9 @@ class TestRateLimitHeaders:
         # Set up: 5 existing requests (well under the 20 limit)
         client_with_redis.app.state.redis = make_redis_mock(existing_request_count=5)  # type: ignore[attr-defined]
 
-        response = client_with_redis.get("/health")  # /health is excluded — use root instead
+        response = client_with_redis.get(
+            "/health"
+        )  # /health is excluded — use root instead
         # Note: /health is excluded from rate limiting — we test via root
         response = client_with_redis.get("/")
 
@@ -143,20 +145,22 @@ class TestRateLimitEnforcement:
         This simulates the 21st request arriving when 20 are already in the window.
         """
         # 20 existing requests = exactly at the limit → next one is rejected
-        client_with_redis.app.state.redis = make_redis_mock(existing_request_count=RATE_LIMIT)  # type: ignore[attr-defined]
+        client_with_redis.app.state.redis = make_redis_mock(
+            existing_request_count=RATE_LIMIT
+        )  # type: ignore[attr-defined]
 
         response = client_with_redis.get("/")
 
         assert response.status_code == 429
 
-    def test_429_body_has_correct_fields(
-        self, client_with_redis: TestClient
-    ) -> None:
+    def test_429_body_has_correct_fields(self, client_with_redis: TestClient) -> None:
         """
         The 429 response body must contain error and retry_after_seconds
         so clients know what happened and when to try again.
         """
-        client_with_redis.app.state.redis = make_redis_mock(existing_request_count=RATE_LIMIT)  # type: ignore[attr-defined]
+        client_with_redis.app.state.redis = make_redis_mock(
+            existing_request_count=RATE_LIMIT
+        )  # type: ignore[attr-defined]
 
         response = client_with_redis.get("/")
         body = response.json()
@@ -164,34 +168,36 @@ class TestRateLimitEnforcement:
         assert body["error"] == "rate_limit_exceeded"
         assert body["retry_after_seconds"] == WINDOW_SECONDS
 
-    def test_429_has_retry_after_header(
-        self, client_with_redis: TestClient
-    ) -> None:
+    def test_429_has_retry_after_header(self, client_with_redis: TestClient) -> None:
         """
         The standard Retry-After header tells HTTP clients and proxies
         how long to wait before retrying.
         """
-        client_with_redis.app.state.redis = make_redis_mock(existing_request_count=RATE_LIMIT)  # type: ignore[attr-defined]
+        client_with_redis.app.state.redis = make_redis_mock(
+            existing_request_count=RATE_LIMIT
+        )  # type: ignore[attr-defined]
 
         response = client_with_redis.get("/")
 
         assert "Retry-After" in response.headers
         assert response.headers["X-RateLimit-Remaining"] == "0"
 
-    def test_exactly_at_limit_is_rejected(
-        self, client_with_redis: TestClient
-    ) -> None:
+    def test_exactly_at_limit_is_rejected(self, client_with_redis: TestClient) -> None:
         """
         Boundary test: RATE_LIMIT existing requests → rejected (not allowed).
         RATE_LIMIT - 1 existing requests → allowed.
         """
         # RATE_LIMIT - 1 existing → this is the 20th request → allowed
-        client_with_redis.app.state.redis = make_redis_mock(existing_request_count=RATE_LIMIT - 1)  # type: ignore[attr-defined]
+        client_with_redis.app.state.redis = make_redis_mock(
+            existing_request_count=RATE_LIMIT - 1
+        )  # type: ignore[attr-defined]
         response = client_with_redis.get("/")
         assert response.status_code == 200
 
         # RATE_LIMIT existing → this is the 21st request → rejected
-        client_with_redis.app.state.redis = make_redis_mock(existing_request_count=RATE_LIMIT)  # type: ignore[attr-defined]
+        client_with_redis.app.state.redis = make_redis_mock(
+            existing_request_count=RATE_LIMIT
+        )  # type: ignore[attr-defined]
         response = client_with_redis.get("/")
         assert response.status_code == 429
 
@@ -238,9 +244,7 @@ class TestRateLimitExclusions:
 class TestRateLimitFailOpen:
     """Verify that a Redis error does not block requests (fail open)."""
 
-    def test_redis_error_allows_request(
-        self, client_with_redis: TestClient
-    ) -> None:
+    def test_redis_error_allows_request(self, client_with_redis: TestClient) -> None:
         """
         If Redis is unavailable, the middleware must fail open — let the request
         through rather than block everyone. A broken rate limiter is much less bad

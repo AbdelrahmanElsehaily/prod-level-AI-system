@@ -41,6 +41,7 @@ from app.services.ai import AIResponse, _messages_to_ollama_format, get_ai_reply
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def make_message(role: MessageRole, content: str) -> Message:
     """Build a minimal ORM Message object for use in tests."""
     msg = MagicMock(spec=Message)
@@ -75,8 +76,8 @@ def make_ollama_response(
 # Tests for _messages_to_ollama_format (pure function, no mocking needed)
 # ---------------------------------------------------------------------------
 
-class TestMessagesToOllamaFormat:
 
+class TestMessagesToOllamaFormat:
     def test_empty_history_produces_single_user_message(self) -> None:
         """
         GIVEN: No prior conversation history
@@ -109,9 +110,9 @@ class TestMessagesToOllamaFormat:
         result = _messages_to_ollama_format(history, "Are you sure?")
 
         assert result == [
-            {"role": "user",      "content": "What is 2+2?"},
+            {"role": "user", "content": "What is 2+2?"},
             {"role": "assistant", "content": "4"},
-            {"role": "user",      "content": "Are you sure?"},
+            {"role": "user", "content": "Are you sure?"},
         ]
 
     def test_role_values_are_strings_not_enum(self) -> None:
@@ -136,8 +137,8 @@ class TestMessagesToOllamaFormat:
 # Tests for get_ai_reply (mocks the Ollama client)
 # ---------------------------------------------------------------------------
 
-class TestGetAiReply:
 
+class TestGetAiReply:
     @pytest.mark.asyncio
     async def test_returns_ai_response_on_success(self) -> None:
         """
@@ -149,7 +150,7 @@ class TestGetAiReply:
             content="Paris is the capital of France.",
             prompt_eval_count=8,
             eval_count=7,
-            model="llama3.2:cloud"
+            model="llama3.2:cloud",
         )
 
         with patch("app.services.ai.ollama.AsyncClient") as mock_client:
@@ -163,9 +164,9 @@ class TestGetAiReply:
 
         assert isinstance(result, AIResponse)
         assert result.reply == "Paris is the capital of France."
-        assert result.tokens_used == 7        # output tokens only (eval_count)
-        assert result.total_tokens == 15      # input + output (8 + 7)
-        print("result: ",result)
+        assert result.tokens_used == 7  # output tokens only (eval_count)
+        assert result.total_tokens == 15  # input + output (8 + 7)
+        print("result: ", result)
         assert result.model == "llama3.2:cloud"
 
     @pytest.mark.asyncio
@@ -250,6 +251,6 @@ class TestGetAiReply:
         messages_sent = call_kwargs["messages"]
 
         assert len(messages_sent) == 3
-        assert messages_sent[0] == {"role": "user",      "content": "Hello"}
+        assert messages_sent[0] == {"role": "user", "content": "Hello"}
         assert messages_sent[1] == {"role": "assistant", "content": "Hi there!"}
-        assert messages_sent[2] == {"role": "user",      "content": "How are you?"}
+        assert messages_sent[2] == {"role": "user", "content": "How are you?"}
