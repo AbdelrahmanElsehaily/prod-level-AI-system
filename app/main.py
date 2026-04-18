@@ -24,6 +24,7 @@ from app.logging_config import setup_logging
 from app.middleware.logging import LoggingMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.routers import chat, health
+from app.sentry import init_sentry
 
 logger = structlog.get_logger(__name__)
 
@@ -86,7 +87,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # 1. Configure structured logging before anything else logs.
     setup_logging()
 
-    # 2. Run database migrations in a thread-pool executor.
+    # 2. Initialise Sentry error tracking.
+    #    Called immediately after logging so any startup errors (migrations,
+    #    Redis connection) are captured by Sentry before they crash the process.
+    #    No-op if SENTRY_DSN is not set (local dev, unit tests).
+    init_sentry()
+
+    # 3. Run database migrations in a thread-pool executor.
     #
     #    Why a thread executor instead of a plain call?
     #
@@ -108,7 +115,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await loop.run_in_executor(None, run_migrations)
     await logger.ainfo("database migrations complete")
 
-    # 3. Create the shared Redis connection pool.
+    # 4. Create the shared Redis connection pool.
     #    Stored on app.state so all requests share one pool (not one connection
     #    per request). decode_responses=True → Redis returns str, not bytes.
     app.state.redis = aioredis.from_url(
