@@ -55,6 +55,29 @@ FROM python:3.12-slim AS final
 
 WORKDIR /app
 
+# Install curl so the Docker HEALTHCHECK (curl -sf http://localhost:8000/health)
+# and any CI smoke-test scripts can reach the app.
+#
+# Why curl and not wget or Python urllib?
+#   curl is the de-facto tool used in most healthcheck one-liners and is what
+#   our docker-compose.test.yml already uses. Keeping the same tool avoids
+#   two different HTTP clients in the stack.
+#
+# Why --no-install-recommends?
+#   apt would otherwise pull in dozens of optional packages (documentation,
+#   locale data, …). --no-install-recommends limits the install to curl and
+#   its hard runtime deps only, keeping the image as slim as possible.
+#
+# Why rm -rf /var/lib/apt/lists/*?
+#   After apt finishes it leaves a cache of package index files in
+#   /var/lib/apt/lists/. That cache is only needed during the RUN step — once
+#   the layer is committed we never need it again. Deleting it in the SAME RUN
+#   instruction (important! a separate RUN would create a new layer on top of
+#   the old one without actually shrinking the image) saves ~30 MB.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy the pre-built virtual environment from the deps stage.
 # This avoids re-running uv sync in the final image, keeping it clean and fast.
 COPY --from=deps /app/.venv /app/.venv
