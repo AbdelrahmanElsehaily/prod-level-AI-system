@@ -23,7 +23,7 @@ from app.config import settings
 from app.logging_config import setup_logging
 from app.middleware.logging import LoggingMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
-from app.routers import chat, health
+from app.routers import chat, debug, health
 from app.sentry import init_sentry
 
 logger = structlog.get_logger(__name__)
@@ -155,9 +155,18 @@ app.add_middleware(RateLimitMiddleware)
 
 # --- Routers ---
 app.include_router(health.router, tags=["Health"])
-# Chat router owns the core product endpoint: POST /chat
-# tags=["Chat"] groups it separately in /docs from infrastructure endpoints.
 app.include_router(chat.router, tags=["Chat"])
+
+# Debug router: only mounted in non-production environments.
+#
+# Why conditional mounting instead of a runtime check inside the route?
+#   A runtime check (if settings.environment == "production": raise 404)
+#   still registers the route in FastAPI's routing table — it appears in
+#   /docs and is technically reachable. Conditional mounting means the route
+#   does not exist at all in production: no /docs entry, no routing overhead,
+#   and no risk of the guard being accidentally removed.
+if settings.environment != "production":
+    app.include_router(debug.router)
 
 
 @app.get("/", tags=["Root"])
