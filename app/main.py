@@ -2,21 +2,31 @@
 app/main.py — FastAPI application entry point
 ==============================================
 This file creates the FastAPI app instance and wires everything together:
-  - Lifespan: startup (logging, migrations, Redis pool) and shutdown (cleanup)
+  - Lifespan: startup (logging, Redis pool) and shutdown (cleanup)
   - Middleware: registered in reverse execution order (last added = first to run)
   - Routers: each domain's endpoints mounted here
 
 No business logic lives here — that belongs in routers/ and services/.
+
+Migrations
+----------
+Database migrations are NOT run here. They are run by the Railway startCommand
+BEFORE uvicorn starts:
+
+  alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+Running migrations in the lifespan as well would be redundant and fragile:
+  - Redundant because startCommand already guarantees the schema is up to date
+    before the first request is ever served.
+  - Fragile because calling asyncio.run() from a run_in_executor worker thread
+    creates a second event loop, which can cause subtle bugs under load.
 """
 
-import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
 import structlog
-from alembic import command
-from alembic.config import Config
 from fastapi import FastAPI
 
 from app.config import settings
@@ -30,48 +40,6 @@ from app.sentry import init_sentry
 logger = structlog.get_logger(__name__)
 
 
-def run_migrations() -> None:
-    """
-    Apply all pending Alembic migrations.
-
-    This function is intentionally synchronous. It is called from the async
-    lifespan via asyncio.get_event_loop().run_in_executor(), which runs it
-    in a worker thread. That thread has no running event loop, which lets
-    migrations/env.py call asyncio.run() safely to drive the async Alembic
-    runner (see the lifespan comment for the full explanation).
-
-    Why run migrations at startup?
-      In production every new deployment may include schema changes. Running
-      migrations here (before the app starts serving traffic) means:
-        - The schema is always in sync with the code that runs against it
-        - If a migration fails, the app never starts → deployment platform
-          rolls back → no traffic served against the wrong schema
-        - No manual `alembic upgrade head` step needed in the deploy pipeline
-
-    Why skip in test environment?
-      Unit tests mock the database entirely (via dependency_overrides), so there
-      is no real Postgres to migrate against. Skipping is correct behaviour,
-      not a workaround — we are not testing migrations here.
-
-      Integration tests (tests/integration/) run against a real Postgres and
-      DO need migrations applied. They handle that by setting ENVIRONMENT to
-      anything other than "test", or by calling alembic upgrade head directly
-      in the CI service container setup step.
-    """
-    if settings.environment == "test":
-        # No real DB in unit tests — all DB calls are mocked via
-        # dependency_overrides. Running migrations would fail anyway
-        # (no Postgres listening), and would hit the asyncio.run()
-        # conflict described above.
-        return
-
-    alembic_cfg = Config("alembic.ini")
-    # Override the database URL from settings rather than alembic.ini,
-    # so the same config file works in every environment without editing it.
-    alembic_cfg.set_main_option("sqlalchemy.url", settings.database_url)
-    command.upgrade(alembic_cfg, "head")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """
@@ -80,43 +48,25 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Everything BEFORE yield → startup (runs once when the process starts)
     Everything AFTER yield  → shutdown (runs even if the app crashes)
 
-    Startup order matters:
+    Startup order:
       1. Logging  — so any startup errors are captured in structured JSON logs
-      2. Migrations — apply DB schema changes before serving any traffic
+      2. Sentry   — so startup crashes are tracked before they kill the process
       3. Redis    — open the connection pool so requests can use it immediately
+
+    Note: migrations are NOT run here. They are handled by the Railway
+    startCommand before uvicorn starts:
+      alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     """
     # 1. Configure structured logging before anything else logs.
     setup_logging()
 
     # 2. Initialise Sentry error tracking.
-    #    Called immediately after logging so any startup errors (migrations,
-    #    Redis connection) are captured by Sentry before they crash the process.
+    #    Called immediately after logging so any startup errors are captured
+    #    by Sentry before they crash the process.
     #    No-op if SENTRY_DSN is not set (local dev, unit tests).
     init_sentry()
 
-    # 3. Run database migrations in a thread-pool executor.
-    #
-    #    Why a thread executor instead of a plain call?
-    #
-    #    migrations/env.py ends with:
-    #        asyncio.run(run_migrations_online())
-    #
-    #    asyncio.run() creates a BRAND NEW event loop. If called from a thread
-    #    that already has a running loop (uvicorn's), Python raises:
-    #        RuntimeError: asyncio.run() cannot be called from a running event loop
-    #
-    #    run_in_executor(None, ...) offloads the call to a worker thread from
-    #    the default ThreadPoolExecutor. That thread has NO running event loop,
-    #    so asyncio.run() inside env.py can safely create one there.
-    #
-    #    The await here suspends the lifespan coroutine until the worker thread
-    #    finishes — migrations complete before any request is served.
-    await logger.ainfo("running database migrations")
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, run_migrations)
-    await logger.ainfo("database migrations complete")
-
-    # 4. Create the shared Redis connection pool.
+    # 3. Create the shared Redis connection pool.
     #    Stored on app.state so all requests share one pool (not one connection
     #    per request). decode_responses=True → Redis returns str, not bytes.
     app.state.redis = aioredis.from_url(
