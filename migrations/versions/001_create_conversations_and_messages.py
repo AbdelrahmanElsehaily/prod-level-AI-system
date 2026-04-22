@@ -65,7 +65,11 @@ def upgrade() -> None:
         "assistant",
         name="message_role",  # This is the name of the type in Postgres
     )
-    message_role_enum.create(op.get_bind())
+    # checkfirst=True makes this idempotent: if a previous deployment attempt
+    # created the ENUM but crashed before the migration was recorded in
+    # alembic_version, re-running upgrade head would fail with
+    # DuplicateObjectError without this guard.
+    message_role_enum.create(op.get_bind(), checkfirst=True)
 
     # --- Step 2: Create the conversations table ---
     op.create_table(
