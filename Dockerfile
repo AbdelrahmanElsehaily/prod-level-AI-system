@@ -87,6 +87,22 @@ COPY --from=deps /app/.venv /app/.venv
 # `/app/.venv/bin/`.
 ENV PATH="/app/.venv/bin:$PATH"
 
+# Tell Python where to find our application package.
+#
+# Why is this needed?
+#   When uvicorn starts via CMD, Python automatically adds the working directory
+#   (/app) to sys.path — so `import app` resolves to /app/app/ correctly.
+#   BUT when Railway's startCommand runs `alembic upgrade head` first (before
+#   uvicorn ever starts), alembic launches as a plain subprocess. Plain subprocess
+#   calls do NOT add CWD to sys.path automatically, so migrations/env.py's
+#   `from app.config import settings` raises:
+#     ModuleNotFoundError: No module named 'app'
+#
+#   Setting PYTHONPATH="/app" makes /app a permanent entry in sys.path for every
+#   process in this container — alembic, uvicorn, and any future scripts — so
+#   `import app` always resolves correctly regardless of how the process started.
+ENV PYTHONPATH="/app"
+
 # Copy application source code.
 # This layer changes on every code edit — but that's fine because it's last.
 # Docker only re-runs layers that changed AND every layer after them.
