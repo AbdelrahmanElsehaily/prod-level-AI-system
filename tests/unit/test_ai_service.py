@@ -153,7 +153,10 @@ class TestGetAiReply:
             model="llama3.2:cloud",
         )
 
-        with patch("app.services.ai.ollama.AsyncClient") as mock_client:
+        with (
+            patch("app.services.ai.langfuse", None),
+            patch("app.services.ai.ollama.AsyncClient") as mock_client,
+        ):
             mock_client.return_value.chat = AsyncMock(return_value=mock_response)
 
             result = await get_ai_reply(
@@ -182,7 +185,10 @@ class TestGetAiReply:
         """
         import ollama as ollama_pkg
 
-        with patch("app.services.ai.ollama.AsyncClient") as mock_client:
+        with (
+            patch("app.services.ai.langfuse", None),
+            patch("app.services.ai.ollama.AsyncClient") as mock_client,
+        ):
             mock_client.return_value.chat = AsyncMock(
                 side_effect=ollama_pkg.ResponseError("model 'llama3.2' not found")
             )
@@ -206,7 +212,10 @@ class TestGetAiReply:
         Without this translation, a raw ConnectionRefusedError would propagate
         to the HTTP layer and cause an unhandled 500 instead of a clean 503.
         """
-        with patch("app.services.ai.ollama.AsyncClient") as mock_client:
+        with (
+            patch("app.services.ai.langfuse", None),
+            patch("app.services.ai.ollama.AsyncClient") as mock_client,
+        ):
             mock_client.return_value.chat = AsyncMock(
                 side_effect=ConnectionRefusedError("Connection refused")
             )
@@ -236,7 +245,10 @@ class TestGetAiReply:
         ]
         mock_response = make_ollama_response()
 
-        with patch("app.services.ai.ollama.AsyncClient") as mock_client:
+        with (
+            patch("app.services.ai.langfuse", None),
+            patch("app.services.ai.ollama.AsyncClient") as mock_client,
+        ):
             mock_chat = AsyncMock(return_value=mock_response)
             mock_client.return_value.chat = mock_chat
 

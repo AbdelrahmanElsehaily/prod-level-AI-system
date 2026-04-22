@@ -4,33 +4,27 @@ tests/unit/test_langfuse.py — unit tests for Langfuse AI tracing
 Two concerns tested here:
 
 1. langfuse_client module behaviour
-   - No credentials → langfuse singleton is None (no-op)
+   - No credentials → init_langfuse() returns None (no-op)
    - Credentials set → Langfuse() is called with the right keys
    - flush() drains the queue when Langfuse is active
    - flush() is a no-op when Langfuse is None
 
-2. get_ai_reply() tracing integration
-   - A generation span is started before the Ollama call
-   - The span is closed with output + token counts on success
-   - The span is closed with ERROR level on Ollama failure
-   - No span is created when Langfuse is disabled
+2. get_ai_reply() tracing integration (Langfuse v4 API)
+   - start_as_current_observation() is called after a successful Ollama call
+   - update_current_generation() receives the reply text and token usage
+   - No observation is created when Langfuse is disabled
+   - trace_id matches conversation_id
+   - Input messages are recorded on the observation
+
+Langfuse v4 API used in ai.py:
+  with langfuse.start_as_current_observation(type="GENERATION", ...) as obs:
+      langfuse.update_current_generation(output=..., usage=...)
 
 Why mock Langfuse?
   Same reason we mock sentry_sdk.init() and ollama.AsyncClient — we never
   want unit tests to open a real network connection to an external service.
-  Mocking lets us assert the exact arguments passed to Langfuse's SDK
+  Mocking lets us assert the exact arguments passed to the Langfuse SDK
   without any I/O.
-
-Mocking strategy for langfuse_client
-  The langfuse singleton is initialised at module import time. We cannot
-  simply patch the constructor call that already happened. Instead we patch
-  the `langfuse` name inside the modules that USE it:
-
-    patch("app.services.ai.langfuse", mock_langfuse_instance)
-    patch("app.langfuse_client.langfuse", mock_langfuse_instance)
-
-  This replaces the reference in the target module's namespace for the
-  duration of the test — the same pattern as patching at the point of use.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -38,11 +32,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.models.database import MessageRole
-from app.models.schemas import AIServiceError
 from app.services.ai import get_ai_reply
 
+
 # ---------------------------------------------------------------------------
-# Helpers (shared with test_ai_service.py but copied here for independence)
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -69,15 +63,24 @@ def make_ollama_response(
 
 def make_langfuse_mock() -> MagicMock:
     """
-    Build a mock Langfuse client instance.
+    Build a mock Langfuse client matching the v4 API:
 
-    generation() returns a mock generation object with an end() method.
-    We capture calls to generation() and end() to assert they were called
-    with the expected arguments.
+      langfuse.start_as_current_observation(...) → sync context manager
+      langfuse.update_current_generation(output=..., usage=...)
+
+    start_as_current_observation returns a context manager, so we configure
+    its __enter__ / __exit__ to behave correctly.
     """
     mock_lf = MagicMock()
-    mock_generation = MagicMock()
-    mock_lf.generation.return_value = mock_generation
+
+    # start_as_current_observation is used as a sync context manager.
+    # __enter__ returns the observation mock, __exit__ is a no-op.
+    mock_obs = MagicMock()
+    mock_ctx = MagicMock()
+    mock_ctx.__enter__ = MagicMock(return_value=mock_obs)
+    mock_ctx.__exit__ = MagicMock(return_value=False)
+    mock_lf.start_as_current_observation.return_value = mock_ctx
+
     return mock_lf
 
 
@@ -92,32 +95,20 @@ class TestLangfuseClientInit:
     def test_no_credentials_returns_none(self) -> None:
         """
         When LANGFUSE_SECRET_KEY is unset, init_langfuse() must return None.
-        We call it directly (no module reload needed) with patched settings.
-
-        Why test init_langfuse() instead of the module-level singleton?
-          The singleton is evaluated at import time — before any test can patch
-          settings. init_langfuse() is a plain callable that reads settings
-          at call time, so we can patch settings and call it repeatedly in tests.
-          Same pattern as testing init_sentry() in test_sentry.py.
         """
         from app.langfuse_client import init_langfuse
 
         with patch("app.langfuse_client.settings") as mock_settings:
             mock_settings.langfuse_secret_key = None
             mock_settings.langfuse_public_key = None
-
             result = init_langfuse()
 
         assert result is None
 
     def test_with_credentials_calls_langfuse_constructor(self) -> None:
         """
-        When both keys are set, init_langfuse() calls Langfuse() exactly once
-        and returns the resulting client instance.
-
-        We patch "langfuse.Langfuse" (the import source inside the function)
-        because init_langfuse() does `from langfuse import Langfuse` on every
-        call — patching the source ensures the function gets our mock.
+        When both keys are set, init_langfuse() calls Langfuse() once and
+        returns the resulting client instance.
         """
         from app.langfuse_client import init_langfuse
 
@@ -136,9 +127,7 @@ class TestLangfuseClientInit:
         assert result is mock_cls.return_value
 
     def test_flush_calls_langfuse_flush_when_active(self) -> None:
-        """
-        flush() must call langfuse.flush() when the client is not None.
-        """
+        """flush() must call langfuse.flush() when the client is not None."""
         from app.langfuse_client import flush
 
         mock_lf = MagicMock()
@@ -148,9 +137,7 @@ class TestLangfuseClientInit:
         mock_lf.flush.assert_called_once()
 
     def test_flush_is_noop_when_langfuse_is_none(self) -> None:
-        """
-        flush() must not raise when langfuse is None (unconfigured).
-        """
+        """flush() must not raise when langfuse is None (unconfigured)."""
         from app.langfuse_client import flush
 
         with patch("app.langfuse_client.langfuse", None):
@@ -158,18 +145,18 @@ class TestLangfuseClientInit:
 
 
 # ---------------------------------------------------------------------------
-# get_ai_reply() Langfuse integration tests
+# get_ai_reply() Langfuse v4 integration tests
 # ---------------------------------------------------------------------------
 
 
 class TestGetAiReplyLangfuseIntegration:
-    """Verify Langfuse tracing calls inside get_ai_reply()."""
+    """Verify Langfuse v4 tracing calls inside get_ai_reply()."""
 
     @pytest.mark.asyncio
-    async def test_generation_started_before_ollama_call(self) -> None:
+    async def test_observation_started_after_successful_ollama_call(self) -> None:
         """
-        A Langfuse generation span must be created before the Ollama call
-        so we always capture timing from the very start of the request.
+        start_as_current_observation() must be called once after a successful
+        Ollama response with the correct type and model.
         """
         mock_lf = make_langfuse_mock()
         mock_response = make_ollama_response()
@@ -185,20 +172,19 @@ class TestGetAiReplyLangfuseIntegration:
                 conversation_id="conv-abc",
             )
 
-        # generation() must have been called once
-        mock_lf.generation.assert_called_once()
-        call_kwargs = mock_lf.generation.call_args.kwargs
+        mock_lf.start_as_current_observation.assert_called_once()
+        call_kwargs = mock_lf.start_as_current_observation.call_args.kwargs
+        assert call_kwargs["type"] == "GENERATION"
         assert call_kwargs["trace_id"] == "conv-abc"
         assert call_kwargs["model"] is not None
 
     @pytest.mark.asyncio
-    async def test_generation_closed_with_output_on_success(self) -> None:
+    async def test_update_current_generation_called_with_output(self) -> None:
         """
-        After a successful Ollama call, generation.end() must be called
-        with the reply text and token usage.
+        update_current_generation() must be called with the reply text and
+        token usage after a successful Ollama call.
         """
         mock_lf = make_langfuse_mock()
-        mock_generation = mock_lf.generation.return_value
         mock_response = make_ollama_response(
             content="The answer is 42.",
             prompt_eval_count=8,
@@ -216,28 +202,47 @@ class TestGetAiReplyLangfuseIntegration:
                 conversation_id="conv-abc",
             )
 
-        mock_generation.end.assert_called_once()
-        end_kwargs = mock_generation.end.call_args.kwargs
+        mock_lf.update_current_generation.assert_called_once()
+        update_kwargs = mock_lf.update_current_generation.call_args.kwargs
 
-        # Output must be the reply text
-        assert end_kwargs["output"] == "The answer is 42."
-
-        # Usage must contain input/output/total token counts
-        usage = end_kwargs["usage"]
+        assert update_kwargs["output"] == "The answer is 42."
+        usage = update_kwargs["usage"]
         assert usage["input"] == 8
         assert usage["output"] == 6
         assert usage["total"] == 14
 
     @pytest.mark.asyncio
-    async def test_generation_closed_with_error_on_ollama_failure(self) -> None:
+    async def test_no_observation_when_langfuse_disabled(self) -> None:
         """
-        When Ollama raises, generation.end() must still be called with
-        level="ERROR" so the span shows as failed in the Langfuse dashboard.
+        When Langfuse is None, no observation is created and the Ollama
+        call still succeeds normally.
+        """
+        mock_response = make_ollama_response(content="I'm fine, thanks!")
+
+        with (
+            patch("app.services.ai.langfuse", None),
+            patch("app.services.ai.ollama.AsyncClient") as mock_client,
+        ):
+            mock_client.return_value.chat = AsyncMock(return_value=mock_response)
+            result = await get_ai_reply(
+                history=[],
+                new_user_message="How are you?",
+                conversation_id="conv-xyz",
+            )
+
+        assert result.reply == "I'm fine, thanks!"
+
+    @pytest.mark.asyncio
+    async def test_no_observation_on_ollama_failure(self) -> None:
+        """
+        When Ollama raises an error, start_as_current_observation() must NOT
+        be called — we only record successful calls in Langfuse to keep the
+        error path simple.
         """
         import ollama as ollama_pkg
+        from app.models.schemas import AIServiceError
 
         mock_lf = make_langfuse_mock()
-        mock_generation = mock_lf.generation.return_value
 
         with (
             patch("app.services.ai.langfuse", mock_lf),
@@ -254,37 +259,13 @@ class TestGetAiReplyLangfuseIntegration:
                     conversation_id="conv-abc",
                 )
 
-        mock_generation.end.assert_called_once()
-        end_kwargs = mock_generation.end.call_args.kwargs
-        assert end_kwargs["level"] == "ERROR"
-
-    @pytest.mark.asyncio
-    async def test_no_generation_when_langfuse_disabled(self) -> None:
-        """
-        When Langfuse is not configured (langfuse is None), no generation
-        object is created. The Ollama call must still succeed normally.
-        """
-        mock_response = make_ollama_response(content="I'm fine, thanks!")
-
-        with (
-            patch("app.services.ai.langfuse", None),
-            patch("app.services.ai.ollama.AsyncClient") as mock_client,
-        ):
-            mock_client.return_value.chat = AsyncMock(return_value=mock_response)
-            result = await get_ai_reply(
-                history=[],
-                new_user_message="How are you?",
-                conversation_id="conv-xyz",
-            )
-
-        # The function must still return a valid AIResponse
-        assert result.reply == "I'm fine, thanks!"
+        mock_lf.start_as_current_observation.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_trace_id_is_conversation_id(self) -> None:
         """
-        The Langfuse trace_id must equal the conversation_id so all AI calls
-        within one conversation are grouped into one trace in the dashboard.
+        trace_id in the observation must equal the conversation_id so all AI
+        calls in one conversation are grouped into one trace in the dashboard.
         """
         mock_lf = make_langfuse_mock()
         mock_response = make_ollama_response()
@@ -300,15 +281,14 @@ class TestGetAiReplyLangfuseIntegration:
                 conversation_id="my-unique-conv-id",
             )
 
-        call_kwargs = mock_lf.generation.call_args.kwargs
+        call_kwargs = mock_lf.start_as_current_observation.call_args.kwargs
         assert call_kwargs["trace_id"] == "my-unique-conv-id"
 
     @pytest.mark.asyncio
-    async def test_input_messages_sent_to_langfuse(self) -> None:
+    async def test_input_messages_recorded_in_observation(self) -> None:
         """
-        The full prompt (history + new message) sent to Ollama must also be
-        recorded in the Langfuse generation so traces show the complete context
-        — not just the user's latest message.
+        The full prompt (history + new message) must be recorded as the
+        observation's input so traces show the complete context.
         """
         mock_lf = make_langfuse_mock()
         mock_response = make_ollama_response()
@@ -329,7 +309,7 @@ class TestGetAiReplyLangfuseIntegration:
                 conversation_id="conv-abc",
             )
 
-        call_kwargs = mock_lf.generation.call_args.kwargs
-        # input must be the full 3-message list (history + new)
+        call_kwargs = mock_lf.start_as_current_observation.call_args.kwargs
+        # input must be the full 3-message list (2 history + 1 new)
         assert len(call_kwargs["input"]) == 3
         assert call_kwargs["input"][2]["content"] == "How are you?"

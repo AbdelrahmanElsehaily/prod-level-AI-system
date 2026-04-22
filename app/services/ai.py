@@ -50,16 +50,22 @@ Token counting
   We store eval_count (output tokens) in the messages table and return the
   total (input + output) in the HTTP response for cost visibility.
 
-Langfuse tracing
-  Every call to get_ai_reply() is wrapped in a Langfuse "generation" — a record
-  of one LLM call with its input, output, tokens, and latency. Generations are
-  nested inside a parent "trace" keyed on conversation_id so all calls in one
-  conversation are grouped together in the Langfuse dashboard.
+Langfuse tracing (v4 API)
+  After every successful Ollama call we record a GENERATION observation in
+  Langfuse using the v4 SDK. The v4 SDK changed from the earlier trace() /
+  generation() object API to a context-manager + update style:
 
-  If Langfuse credentials are not configured (LANGFUSE_SECRET_KEY not set),
-  the import guard in langfuse_client.py sets `langfuse` to None and all the
-  tracing code below is bypassed — the service works exactly as before, just
-  without observability.
+    with langfuse.start_as_current_observation(type="GENERATION", ...) as obs:
+        langfuse.update_current_generation(output=..., usage=...)
+
+  We record the result AFTER the Ollama call completes rather than wrapping the
+  call itself — this keeps the Ollama error handling path simple (no nested
+  context managers) while still capturing model, input, output, tokens, and
+  latency for every request. Failed calls are not recorded in Langfuse but are
+  always captured by Sentry and structlog.
+
+  If LANGFUSE_SECRET_KEY is not set, `langfuse` is None and all tracing code
+  is skipped — the service works exactly as before, just without observability.
 """
 
 import time
@@ -177,10 +183,10 @@ async def get_ai_reply(
     """
     Send the conversation history + new message to Ollama and return the reply.
 
-    Every call is automatically traced in Langfuse (if credentials are set):
-      - A parent trace is created/updated keyed on conversation_id
-      - A child generation records the exact model, prompt, completion,
-        tokens, latency, and estimated cost
+    On success, the call is recorded as a Langfuse GENERATION observation
+    (if credentials are configured). On failure, the error is logged via
+    structlog and re-raised as AIServiceError — Langfuse is NOT called on
+    the error path to keep that path simple and robust.
 
     Args:
         history:          Previous messages in this conversation (oldest first).
@@ -197,25 +203,6 @@ async def get_ai_reply(
                         The router catches this and returns HTTP 503.
     """
     messages = _messages_to_ollama_format(history, new_user_message)
-
-    # -----------------------------------------------------------------------
-    # Start a Langfuse generation span BEFORE the Ollama call.
-    # The generation records the full input and stays "open" until we call
-    # generation.end() with the output and metrics after the call completes.
-    # If Langfuse is disabled (langfuse is None), this block is skipped.
-    # -----------------------------------------------------------------------
-    generation = None
-    if langfuse is not None:
-        # trace_id=conversation_id groups all calls in this conversation
-        # together as a single trace in the Langfuse UI. Every generation
-        # below this trace is one AI call.
-        generation = langfuse.generation(
-            trace_id=conversation_id,
-            name="ollama-chat",
-            model=settings.ollama_model,
-            input=messages,
-            metadata={"conversation_id": conversation_id},
-        )
 
     # Build request headers.
     # For Ollama cloud, an API key is required and sent as a Bearer token.
@@ -244,15 +231,6 @@ async def get_ai_reply(
     except ollama.ResponseError as exc:
         # ResponseError: Ollama is running but returned an error (e.g. model
         # not found — the model wasn't pulled with `ollama pull <model>`).
-
-        # Close the Langfuse generation with an error status so it appears
-        # as a failed span in the dashboard (red instead of green).
-        if generation is not None:
-            generation.end(
-                level="ERROR",
-                status_message=f"ollama ResponseError: {exc.error}",
-            )
-
         await logger.aerror(
             "ollama response error",
             conversation_id=conversation_id,
@@ -267,13 +245,6 @@ async def get_ai_reply(
         # Catches connection errors (Ollama not running, wrong URL, network
         # timeouts). We log the original exception for debugging but raise
         # a clean AIServiceError so the HTTP layer stays decoupled from Ollama.
-
-        if generation is not None:
-            generation.end(
-                level="ERROR",
-                status_message=f"connection error: {exc}",
-            )
-
         await logger.aerror(
             "ollama unreachable",
             conversation_id=conversation_id,
@@ -297,32 +268,46 @@ async def get_ai_reply(
     reply_text = response.message.content or ""
 
     # -----------------------------------------------------------------------
-    # Close the Langfuse generation with output and metrics.
-    # This sends the complete span (input → output + tokens + latency) to
-    # Langfuse's ingestion API asynchronously (batched in the background).
+    # Record the completed call in Langfuse (v4 API).
+    #
+    # Langfuse v4 changed from the object-based API (trace() / generation())
+    # to a context-manager style:
+    #   start_as_current_observation() — opens a span as the current context
+    #   update_current_generation()    — writes output + usage into that span
+    #
+    # We record AFTER the call (not during) so the error path above stays
+    # simple — no need to close a generation span on exceptions. The timing
+    # is captured by duration_ms which we calculated ourselves.
+    #
+    # trace_id=conversation_id groups all calls in one conversation together
+    # as a single trace in the Langfuse dashboard.
     # -----------------------------------------------------------------------
-    if generation is not None:
-        generation.end(
-            output=reply_text,
-            usage={
-                # Langfuse's standard field names for OpenAI-compatible token counts.
-                # "input" = prompt tokens, "output" = completion tokens.
-                "input": input_tokens,
-                "output": output_tokens,
-                "total": total_tokens,
-                # unit tells Langfuse how to interpret these numbers.
-                # "TOKENS" means each unit is one LLM token.
-                "unit": "TOKENS",
-            },
-            # calculated_input_cost / calculated_output_cost let Langfuse
-            # show cost breakdowns in the dashboard without us having to
-            # configure a pricing table per model.
-            metadata={
-                "conversation_id": conversation_id,
-                "duration_ms": duration_ms,
-                "estimated_cost_usd": _estimate_cost(input_tokens, output_tokens),
-            },
-        )
+    if langfuse is not None:
+        with langfuse.start_as_current_observation(
+            name="ollama-chat",
+            type="GENERATION",
+            model=settings.ollama_model,
+            input=messages,
+            trace_id=conversation_id,
+            metadata={"conversation_id": conversation_id},
+        ):
+            langfuse.update_current_generation(
+                output=reply_text,
+                usage={
+                    # Langfuse standard field names for token counts.
+                    "input": input_tokens,
+                    "output": output_tokens,
+                    "total": total_tokens,
+                    # "TOKENS" tells Langfuse each unit is one LLM token
+                    # (as opposed to characters or bytes).
+                    "unit": "TOKENS",
+                },
+                metadata={
+                    "conversation_id": conversation_id,
+                    "duration_ms": duration_ms,
+                    "estimated_cost_usd": _estimate_cost(input_tokens, output_tokens),
+                },
+            )
 
     await logger.ainfo(
         "ai reply received",
@@ -332,7 +317,7 @@ async def get_ai_reply(
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         duration_ms=duration_ms,
-        langfuse_traced=generation is not None,
+        langfuse_traced=langfuse is not None,
         # Log content length not content — replies may contain sensitive info
         reply_length=len(reply_text),
     )
