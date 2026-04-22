@@ -54,6 +54,12 @@ jobs:
       # protection rules (e.g. require approval before production) later.
       name: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
 
+    # Expose secrets as env vars at the job level so they can be referenced
+    # in step `if:` conditions. GitHub Actions does not allow `secrets.*` in
+    # `if:` expressions directly — only `env.*` and `vars.*` are permitted there.
+    env:
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -108,7 +114,7 @@ jobs:
       # If any are missing, the step is skipped (|| true) — a missing Sentry
       # notification should never block a deploy.
       - name: Create Sentry release
-        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        if: ${{ env.SENTRY_AUTH_TOKEN != '' }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
