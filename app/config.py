@@ -15,6 +15,7 @@ We use Pydantic's BaseSettings, which:
   3. Supports .env files in development via python-dotenv (bundled with pydantic-settings)
 """
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,7 +30,39 @@ class Settings(BaseSettings):
     # --- Database ---
     # asyncpg is the async Postgres driver; SQLAlchemy uses it via the
     # "postgresql+asyncpg://" scheme.
+    #
+    # Railway (and many other platforms) provide DATABASE_URL in the standard
+    # "postgresql://" or "postgres://" format. Our validator below normalises
+    # any of those variants to "postgresql+asyncpg://" automatically so the
+    # app works whether the URL comes from Railway, Heroku, local dev, or CI.
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/chatapi"
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def fix_database_url(cls, v: str) -> str:
+        """
+        Normalise any Postgres URL variant to the asyncpg scheme.
+
+        Why this is needed:
+          SQLAlchemy's asyncpg dialect requires the URL scheme to be
+          "postgresql+asyncpg://". Cloud platforms (Railway, Heroku, Render,
+          Supabase) typically provide DATABASE_URL with the older
+          "postgresql://" or "postgres://" scheme.
+
+          Without this fix the app crashes at startup with:
+            "Could not parse rfc1738 URL from string 'postgresql://...'"
+          or connects to the wrong driver (psycopg2 instead of asyncpg).
+
+        What this normalises:
+          postgres://...          → postgresql+asyncpg://...  (Heroku legacy)
+          postgresql://...        → postgresql+asyncpg://...  (Railway, Render)
+          postgresql+asyncpg://...→ unchanged (already correct)
+        """
+        if v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        if v.startswith("postgresql://"):
+            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
     # --- Cache / rate limiting ---
     # Redis is used for rate limiting (Step 6) and response caching (Step 12).
