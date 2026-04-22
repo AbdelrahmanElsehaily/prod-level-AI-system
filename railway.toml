@@ -34,7 +34,7 @@ builder = "dockerfile"
 # alembic upgrade head runs first to apply any pending migrations.
 # If migrations fail (e.g. bad SQL), the command exits non-zero and Railway
 # aborts the deploy — the old version keeps running, no downtime.
-startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+startCommand = "sh -c 'echo MIGRATIONS_START && alembic upgrade head && echo MIGRATIONS_DONE && exec uvicorn app.main:app --host 0.0.0.0 --port $PORT'"
 
 # Railway pings this path after deploy to decide if the new instance is healthy.
 # If /health returns non-2xx within healthcheckTimeout seconds, Railway rolls
