@@ -126,6 +126,12 @@ async def run_migrations_online() -> None:
     connectable = create_async_engine(
         settings.database_url,
         poolclass=pool.NullPool,
+        # asyncpg's default connection timeout is 60 s. On Railway the
+        # healthcheck window is 30 s, so a hung connection attempt causes the
+        # deploy to fail silently with no error in the logs. 10 s gives enough
+        # time for a healthy database and fails fast with a clear error message
+        # when DATABASE_URL is misconfigured or the network is unreachable.
+        connect_args={"timeout": 10},
     )
 
     # sync_engine is the synchronous connection interface that Alembic expects.

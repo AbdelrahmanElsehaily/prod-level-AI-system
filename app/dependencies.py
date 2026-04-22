@@ -46,6 +46,9 @@ engine = create_async_engine(
     echo=settings.environment == "development",  # SQL logging in dev only
     pool_size=5,  # Max connections kept open at all times
     max_overflow=10,  # Extra connections allowed when pool is exhausted
+    # Fail fast if the database is unreachable. asyncpg's default is 60 s,
+    # which exceeds Railway's 30 s healthcheck window and causes silent hangs.
+    connect_args={"timeout": 10},
 )
 
 # async_sessionmaker is a factory that creates new AsyncSession objects.
