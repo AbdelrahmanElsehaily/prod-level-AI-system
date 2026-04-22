@@ -1,0 +1,62 @@
+# railway.toml — Railway deployment configuration
+# ================================================
+# This file tells Railway how to build, start, and health-check the app.
+# It is read by Railway's deployment system on every push.
+#
+# Railway docs: https://docs.railway.app/reference/config-as-code
+#
+# Why config-as-code (this file) rather than the Railway dashboard?
+#   - Changes are tracked in git — you can see exactly when a deploy config
+#     changed and why (via the commit message).
+#   - Staging and production use the same file, so there are no "it works in
+#     staging but the dashboard is different in production" surprises.
+#   - New team members get the correct config automatically when they clone.
+
+[build]
+# Use the Dockerfile in the repo root to build the image.
+# Railway supports several builders (Nixpacks, Heroku buildpacks, Dockerfile).
+# We use Dockerfile because we already have a carefully tuned multi-stage
+# build that installs exact pinned deps from uv.lock.
+builder = "dockerfile"
+
+# ── Dockerfile path is automatically detected (root of the repo).
+# If you ever move the Dockerfile, add: dockerfilePath = "path/to/Dockerfile"
+
+[deploy]
+# startCommand runs INSIDE the built container, replacing the Dockerfile CMD.
+#
+# Why override CMD here instead of baking it into the Dockerfile?
+#   Railway injects $PORT at runtime (it may differ between environments and
+#   restarts). The Dockerfile CMD hardcodes --port 8000 which works for local
+#   Docker, but in Railway the port must be read from the env var. Overriding
+#   here lets us use $PORT while keeping the Dockerfile usable for local dev.
+#
+# alembic upgrade head runs first to apply any pending migrations.
+# If migrations fail (e.g. bad SQL), the command exits non-zero and Railway
+# aborts the deploy — the old version keeps running, no downtime.
+startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+
+# Railway pings this path after deploy to decide if the new instance is healthy.
+# If /health returns non-2xx within healthcheckTimeout seconds, Railway rolls
+# back to the previous deployment automatically.
+#
+# Why /health and not /?
+#   /health checks Postgres and Redis connectivity — a 200 there means the
+#   full stack is working. / only confirms the process started.
+healthcheckPath = "/health"
+
+# Seconds Railway waits for healthcheckPath to return 2xx before giving up.
+# 30s is generous: migrations + uvicorn startup typically take 3-8s.
+# Set higher if your database has many migrations that take longer to run.
+healthcheckTimeout = 30
+
+# What to do if the container crashes or exits non-zero.
+# "on_failure" restarts the container automatically on crash, but NOT on
+# successful exits (exit code 0) — prevents infinite restart loops if you
+# intentionally stop the service.
+restartPolicyType = "on_failure"
+
+# How many times to attempt a restart before giving up.
+# After 3 failed restarts Railway stops trying and marks the deploy as failed,
+# triggering an alert. Adjust if your app needs more time to recover.
+restartPolicyMaxRetries = 3
