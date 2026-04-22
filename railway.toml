@@ -46,9 +46,10 @@ startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --po
 healthcheckPath = "/health"
 
 # Seconds Railway waits for healthcheckPath to return 2xx before giving up.
-# 30s is generous: migrations + uvicorn startup typically take 3-8s.
-# Set higher if your database has many migrations that take longer to run.
-healthcheckTimeout = 30
+# 60s: alembic upgrade head (DB connection + DDL) + uvicorn startup + first
+# request to /health. asyncpg connection timeout is now capped at 10 s, so
+# a misconfigured DATABASE_URL surfaces a clear error well within this window.
+healthcheckTimeout = 60
 
 # What to do if the container crashes or exits non-zero.
 # "on_failure" restarts the container automatically on crash, but NOT on
