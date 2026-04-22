@@ -49,6 +49,17 @@ Token counting
     response.eval_count         — tokens in the output (the reply)
   We store eval_count (output tokens) in the messages table and return the
   total (input + output) in the HTTP response for cost visibility.
+
+Langfuse tracing
+  Every call to get_ai_reply() is wrapped in a Langfuse "generation" — a record
+  of one LLM call with its input, output, tokens, and latency. Generations are
+  nested inside a parent "trace" keyed on conversation_id so all calls in one
+  conversation are grouped together in the Langfuse dashboard.
+
+  If Langfuse credentials are not configured (LANGFUSE_SECRET_KEY not set),
+  the import guard in langfuse_client.py sets `langfuse` to None and all the
+  tracing code below is bypassed — the service works exactly as before, just
+  without observability.
 """
 
 import time
@@ -58,10 +69,43 @@ import ollama
 import structlog
 
 from app.config import settings
+from app.langfuse_client import langfuse
 from app.models.database import Message
 from app.models.schemas import AIServiceError
 
 logger = structlog.get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Cost estimation
+# ---------------------------------------------------------------------------
+# Rough per-token cost in USD for the Ollama cloud llama3.2 model.
+# These figures come from Ollama's public pricing page.
+# Adjust if you switch to a different model or provider.
+#
+# Cost is estimated and logged to Langfuse for budget visibility — it is NOT
+# billed via this code; actual billing happens on Ollama's side.
+_COST_PER_INPUT_TOKEN_USD = 0.00000006  # $0.06 per million input tokens
+_COST_PER_OUTPUT_TOKEN_USD = 0.00000006  # $0.06 per million output tokens
+
+
+def _estimate_cost(input_tokens: int, output_tokens: int) -> float:
+    """
+    Return a rough cost estimate in USD for one AI call.
+
+    This is an approximation — Ollama's actual billing may differ slightly.
+    We record it in Langfuse so the dashboard can show running cost totals
+    and flag unexpectedly expensive requests.
+    """
+    return round(
+        input_tokens * _COST_PER_INPUT_TOKEN_USD
+        + output_tokens * _COST_PER_OUTPUT_TOKEN_USD,
+        8,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Data types
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -87,6 +131,11 @@ class AIResponse:
     tokens_used: int  # output tokens — stored per message in DB
     total_tokens: int  # input + output — returned in HTTP response
     model: str
+
+
+# ---------------------------------------------------------------------------
+# Message formatting
+# ---------------------------------------------------------------------------
 
 
 def _messages_to_ollama_format(
@@ -115,6 +164,11 @@ def _messages_to_ollama_format(
     return messages
 
 
+# ---------------------------------------------------------------------------
+# Main inference function
+# ---------------------------------------------------------------------------
+
+
 async def get_ai_reply(
     history: list[Message],
     new_user_message: str,
@@ -123,12 +177,17 @@ async def get_ai_reply(
     """
     Send the conversation history + new message to Ollama and return the reply.
 
+    Every call is automatically traced in Langfuse (if credentials are set):
+      - A parent trace is created/updated keyed on conversation_id
+      - A child generation records the exact model, prompt, completion,
+        tokens, latency, and estimated cost
+
     Args:
         history:          Previous messages in this conversation (oldest first).
                           May be empty for a new conversation.
         new_user_message: The user's latest message text.
-        conversation_id:  Used only for structured logging — lets us correlate
-                          AI call logs with request logs via the same ID.
+        conversation_id:  Used for structured logging and as the Langfuse
+                          trace ID so all calls in one conversation are grouped.
 
     Returns:
         AIResponse with the reply text, token counts, and model name.
@@ -138,6 +197,25 @@ async def get_ai_reply(
                         The router catches this and returns HTTP 503.
     """
     messages = _messages_to_ollama_format(history, new_user_message)
+
+    # -----------------------------------------------------------------------
+    # Start a Langfuse generation span BEFORE the Ollama call.
+    # The generation records the full input and stays "open" until we call
+    # generation.end() with the output and metrics after the call completes.
+    # If Langfuse is disabled (langfuse is None), this block is skipped.
+    # -----------------------------------------------------------------------
+    generation = None
+    if langfuse is not None:
+        # trace_id=conversation_id groups all calls in this conversation
+        # together as a single trace in the Langfuse UI. Every generation
+        # below this trace is one AI call.
+        generation = langfuse.generation(
+            trace_id=conversation_id,
+            name="ollama-chat",
+            model=settings.ollama_model,
+            input=messages,
+            metadata={"conversation_id": conversation_id},
+        )
 
     # Build request headers.
     # For Ollama cloud, an API key is required and sent as a Bearer token.
@@ -166,6 +244,15 @@ async def get_ai_reply(
     except ollama.ResponseError as exc:
         # ResponseError: Ollama is running but returned an error (e.g. model
         # not found — the model wasn't pulled with `ollama pull <model>`).
+
+        # Close the Langfuse generation with an error status so it appears
+        # as a failed span in the dashboard (red instead of green).
+        if generation is not None:
+            generation.end(
+                level="ERROR",
+                status_message=f"ollama ResponseError: {exc.error}",
+            )
+
         await logger.aerror(
             "ollama response error",
             conversation_id=conversation_id,
@@ -180,6 +267,13 @@ async def get_ai_reply(
         # Catches connection errors (Ollama not running, wrong URL, network
         # timeouts). We log the original exception for debugging but raise
         # a clean AIServiceError so the HTTP layer stays decoupled from Ollama.
+
+        if generation is not None:
+            generation.end(
+                level="ERROR",
+                status_message=f"connection error: {exc}",
+            )
+
         await logger.aerror(
             "ollama unreachable",
             conversation_id=conversation_id,
@@ -202,6 +296,34 @@ async def get_ai_reply(
 
     reply_text = response.message.content or ""
 
+    # -----------------------------------------------------------------------
+    # Close the Langfuse generation with output and metrics.
+    # This sends the complete span (input → output + tokens + latency) to
+    # Langfuse's ingestion API asynchronously (batched in the background).
+    # -----------------------------------------------------------------------
+    if generation is not None:
+        generation.end(
+            output=reply_text,
+            usage={
+                # Langfuse's standard field names for OpenAI-compatible token counts.
+                # "input" = prompt tokens, "output" = completion tokens.
+                "input": input_tokens,
+                "output": output_tokens,
+                "total": total_tokens,
+                # unit tells Langfuse how to interpret these numbers.
+                # "TOKENS" means each unit is one LLM token.
+                "unit": "TOKENS",
+            },
+            # calculated_input_cost / calculated_output_cost let Langfuse
+            # show cost breakdowns in the dashboard without us having to
+            # configure a pricing table per model.
+            metadata={
+                "conversation_id": conversation_id,
+                "duration_ms": duration_ms,
+                "estimated_cost_usd": _estimate_cost(input_tokens, output_tokens),
+            },
+        )
+
     await logger.ainfo(
         "ai reply received",
         conversation_id=conversation_id,
@@ -210,6 +332,7 @@ async def get_ai_reply(
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         duration_ms=duration_ms,
+        langfuse_traced=generation is not None,
         # Log content length not content — replies may contain sensitive info
         reply_length=len(reply_text),
     )

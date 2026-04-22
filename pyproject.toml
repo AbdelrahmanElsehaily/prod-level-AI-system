@@ -31,6 +31,7 @@ dependencies = [
     "redis>=5.2.0",
     "structlog>=24.4.0",
     "sentry-sdk[fastapi]>=2.19.0",
+    "langfuse>=4.5.0",
 ]
 
 [project.optional-dependencies]

@@ -20,6 +20,7 @@ from alembic.config import Config
 from fastapi import FastAPI
 
 from app.config import settings
+from app.langfuse_client import flush as flush_langfuse
 from app.logging_config import setup_logging
 from app.middleware.logging import LoggingMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -124,6 +125,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     yield  # ← The application runs here, handling requests
+
+    # Shutdown: flush Langfuse's background queue first — this drains any
+    # pending trace events so they reach the Langfuse API before the process
+    # exits. If we closed Redis first, Langfuse flushes fine (it uses its own
+    # HTTP connection, not Redis), so order here doesn't matter much.
+    flush_langfuse()
 
     # Shutdown: close the Redis pool gracefully so Redis doesn't log
     # "connection closed unexpectedly" warnings.
