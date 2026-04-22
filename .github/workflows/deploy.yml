@@ -1,0 +1,147 @@
+name: Deploy
+
+# When does this workflow run?
+#
+# push to develop → deploy to staging  (every merged PR to develop)
+# push to main    → deploy to production (every merged PR to main)
+#
+# Why push (not pull_request)?
+#   CI runs on pull_request and blocks the merge if tests fail.
+#   This workflow runs AFTER the merge — we only deploy code that passed CI.
+#   Using push means we never have to manually trigger a deploy.
+#
+# Why not combine with ci.yml?
+#   Separation of concerns. CI runs on every PR (including drafts and WIP branches).
+#   Deploy only runs on merges to the two long-lived branches.
+#   Keeping them separate makes it easy to re-run deploy without re-running tests,
+#   and to read the CI history vs. deploy history independently.
+on:
+  push:
+    branches:
+      - develop  # → staging environment
+      - main     # → production environment
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: deploy
+  # ---------------------------------------------------------------------------
+  # Pushes the new code to Railway. Railway then:
+  #   1. Builds the Docker image (using our Dockerfile)
+  #   2. Runs `alembic upgrade head && uvicorn ...` (from railway.toml startCommand)
+  #   3. Health-checks /health (from railway.toml healthcheckPath)
+  #   4. Promotes the new instance to live traffic if healthy; rolls back if not
+  #
+  # Required GitHub Actions secrets (set in repo Settings → Secrets → Actions):
+  #   RAILWAY_TOKEN      — API token from railway.app → Account Settings → Tokens
+  #   RAILWAY_PROJECT_ID — UUID from your Railway project Settings page
+  #
+  # Required GitHub Actions variables (set in repo Settings → Variables → Actions):
+  #   (none currently — service names are derived from branch name below)
+  deploy:
+    name: Deploy to Railway
+    runs-on: ubuntu-latest
+
+    # Map the branch name to a Railway environment name and a human-readable
+    # label used in step names and the Sentry release notification.
+    #
+    # Railway environments are named in the Railway dashboard. The convention
+    # here matches the environment names you created:
+    #   develop branch → "staging" environment
+    #   main branch    → "production" environment
+    environment:
+      # GitHub Environments let you add manual approval gates and env-specific
+      # secrets. For now we just name them to match Railway — you can add
+      # protection rules (e.g. require approval before production) later.
+      name: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------------------
+      # Deploy via Railway CLI
+      # ---------------------------------------------------------------------------
+      # The official Railway GitHub Action wraps the Railway CLI's `railway up`
+      # command. It authenticates with RAILWAY_TOKEN, finds the project by
+      # RAILWAY_PROJECT_ID, and triggers a new deployment.
+      #
+      # environment: maps to the Railway environment name. Railway uses separate
+      # environments (staging / production) so each has its own DATABASE_URL,
+      # REDIS_URL, and env-specific variables. A deploy to staging never touches
+      # the production database.
+      #
+      # Why not use `railway up --detach`?
+      #   Without --detach, the action waits for Railway to finish building and
+      #   health-checking before the step completes. This means:
+      #     - The GitHub Actions step turns red if the Railway deploy fails
+      #     - You see "Deploy failed" in the Actions UI, not just in Railway's UI
+      #     - The Sentry release step below only runs on success
+      - name: Deploy to Railway (${{ github.ref_name == 'main' && 'production' || 'staging' }})
+        uses: railwayapp/railway-github-action@v1
+        with:
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+          project_id: ${{ secrets.RAILWAY_PROJECT_ID }}
+          environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+          # service: if you have multiple services in one Railway project (e.g.
+          # api + worker), specify the service name here. Omit to deploy all
+          # services in the environment.
+          # service: "api"
+
+      # ---------------------------------------------------------------------------
+      # Notify Sentry of the new release
+      # ---------------------------------------------------------------------------
+      # Sentry uses release notifications to:
+      #   1. Mark errors as "first seen in version X" — when did a bug appear?
+      #   2. Show which commits are in each release — what changed?
+      #   3. Resolve issues automatically if a release includes a fix commit
+      #
+      # We send the notification AFTER a successful deploy (not before) because
+      # Sentry uses it to timestamp error attribution. If we send it before and
+      # the deploy fails, Sentry would falsely attribute errors to a version that
+      # was never actually live.
+      #
+      # SENTRY_AUTH_TOKEN: get from sentry.io → Settings → Auth Tokens
+      # SENTRY_ORG: your Sentry org slug (visible in the URL: sentry.io/orgs/<slug>/)
+      # SENTRY_PROJECT: your Sentry project slug
+      #
+      # All three must be added as GitHub Actions secrets for this step to work.
+      # If any are missing, the step is skipped (|| true) — a missing Sentry
+      # notification should never block a deploy.
+      - name: Create Sentry release
+        if: ${{ secrets.SENTRY_AUTH_TOKEN != '' }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          ENVIRONMENT: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+        run: |
+          # Install the Sentry CLI
+          curl -sL https://sentry.io/get-cli/ | bash
+
+          # Create a release named after the commit SHA.
+          # Short SHA (first 7 chars) is conventional — readable in the Sentry UI.
+          RELEASE="${{ github.sha }}"
+          SHORT_RELEASE="${RELEASE:0:7}"
+
+          sentry-cli releases new "$SHORT_RELEASE" \
+            --org "$SENTRY_ORG" \
+            --project "$SENTRY_PROJECT"
+
+          # Associate commits in this release with the Sentry release.
+          # Sentry uses this to show which code changes might have introduced a bug.
+          sentry-cli releases set-commits "$SHORT_RELEASE" \
+            --auto \
+            --org "$SENTRY_ORG" \
+            --project "$SENTRY_PROJECT"
+
+          # Finalise the release and mark it deployed to the correct environment.
+          sentry-cli releases finalize "$SHORT_RELEASE" \
+            --org "$SENTRY_ORG" \
+            --project "$SENTRY_PROJECT"
+
+          sentry-cli releases deploys "$SHORT_RELEASE" new \
+            --env "$ENVIRONMENT" \
+            --org "$SENTRY_ORG" \
+            --project "$SENTRY_PROJECT"
+
+          echo "Sentry release $SHORT_RELEASE deployed to $ENVIRONMENT"
