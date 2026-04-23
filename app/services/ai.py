@@ -283,24 +283,26 @@ async def get_ai_reply(
     # as a single trace in the Langfuse dashboard.
     # -----------------------------------------------------------------------
     if langfuse is not None:
+        from langfuse.types import TraceContext  # noqa: PLC0415
+
         with langfuse.start_as_current_observation(
             name="ollama-chat",
-            type="GENERATION",
+            # as_type (not "type") selects the observation kind.
+            # "generation" is the correct lowercase value for LLM calls.
+            as_type="generation",
             model=settings.ollama_model,
             input=messages,
-            trace_id=conversation_id,
+            # trace_id is passed via TraceContext, not as a direct kwarg.
+            trace_context=TraceContext(trace_id=conversation_id),
             metadata={"conversation_id": conversation_id},
         ):
             langfuse.update_current_generation(
                 output=reply_text,
-                usage={
-                    # Langfuse standard field names for token counts.
+                # usage_details only accepts int values — no "unit" string key.
+                usage_details={
                     "input": input_tokens,
                     "output": output_tokens,
                     "total": total_tokens,
-                    # "TOKENS" tells Langfuse each unit is one LLM token
-                    # (as opposed to characters or bytes).
-                    "unit": "TOKENS",
                 },
                 metadata={
                     "conversation_id": conversation_id,
