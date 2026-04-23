@@ -32,8 +32,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.models.database import MessageRole
+from app.models.schemas import AIServiceError
 from app.services.ai import get_ai_reply
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -175,7 +175,7 @@ class TestGetAiReplyLangfuseIntegration:
         mock_lf.start_as_current_observation.assert_called_once()
         call_kwargs = mock_lf.start_as_current_observation.call_args.kwargs
         assert call_kwargs["as_type"] == "generation"
-        assert call_kwargs["trace_context"]["trace_id"] == "conv-abc"
+        assert call_kwargs["trace_context"]["trace_id"] == "conv-abc".replace("-", "")
         assert call_kwargs["model"] is not None
 
     @pytest.mark.asyncio
@@ -240,7 +240,6 @@ class TestGetAiReplyLangfuseIntegration:
         error path simple.
         """
         import ollama as ollama_pkg
-        from app.models.schemas import AIServiceError
 
         mock_lf = make_langfuse_mock()
 
@@ -282,7 +281,7 @@ class TestGetAiReplyLangfuseIntegration:
             )
 
         call_kwargs = mock_lf.start_as_current_observation.call_args.kwargs
-        assert call_kwargs["trace_context"]["trace_id"] == "my-unique-conv-id"
+        assert call_kwargs["trace_context"]["trace_id"] == "my-unique-conv-id".replace("-", "")
 
     @pytest.mark.asyncio
     async def test_input_messages_recorded_in_observation(self) -> None:
