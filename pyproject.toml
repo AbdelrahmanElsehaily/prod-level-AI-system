@@ -43,6 +43,15 @@ dev = [
     "mypy>=1.13.0",
     "pre-commit>=4.0.0",
 ]
+ui = [
+    # Streamlit powers the internal demo chat UI (ui/chat_app.py).
+    # Install with: uv sync --extra ui
+    # Run with:     streamlit run ui/chat_app.py
+    "streamlit>=1.40.0",
+    # requests is used by the Streamlit app to call the FastAPI backend.
+    # (httpx is in dev deps but we keep the UI deps self-contained.)
+    "requests>=2.32.0",
+]
 
 [tool.ruff]
 target-version = "py312"
