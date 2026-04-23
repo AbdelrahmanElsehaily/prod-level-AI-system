@@ -292,8 +292,14 @@ async def get_ai_reply(
             as_type="generation",
             model=settings.ollama_model,
             input=messages,
-            # trace_id is passed via TraceContext, not as a direct kwarg.
-            trace_context=TraceContext(trace_id=conversation_id),
+            # trace_id must be a pure hex string — no hyphens.
+            # conversation_id is a UUID (e.g. "4875f18c-15a1-...") and
+            # Langfuse calls int(trace_id, 16) internally, which raises
+            # ValueError on hyphenated UUIDs. Stripping hyphens gives the
+            # same 32-char hex value Langfuse expects.
+            trace_context=TraceContext(
+                trace_id=conversation_id.replace("-", "")
+            ),
             metadata={"conversation_id": conversation_id},
         ):
             langfuse.update_current_generation(
