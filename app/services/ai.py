@@ -297,9 +297,7 @@ async def get_ai_reply(
             # Langfuse calls int(trace_id, 16) internally, which raises
             # ValueError on hyphenated UUIDs. Stripping hyphens gives the
             # same 32-char hex value Langfuse expects.
-            trace_context=TraceContext(
-                trace_id=conversation_id.replace("-", "")
-            ),
+            trace_context=TraceContext(trace_id=conversation_id.replace("-", "")),
             metadata={"conversation_id": conversation_id},
         ):
             langfuse.update_current_generation(

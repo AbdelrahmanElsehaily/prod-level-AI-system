@@ -97,7 +97,9 @@ if user_input:
     # Show user message immediately
     with st.chat_message("user"):
         st.markdown(user_input)
-    st.session_state.messages.append({"role": "user", "content": user_input, "meta": {}})
+    st.session_state.messages.append(
+        {"role": "user", "content": user_input, "meta": {}}
+    )
 
     # Call the API
     with st.chat_message("assistant"):
@@ -119,9 +121,7 @@ if user_input:
                 }
 
                 st.markdown(reply)
-                st.caption(
-                    f"🔧 {meta['model']} · 🪙 {meta['tokens_used']} tokens"
-                )
+                st.caption(f"🔧 {meta['model']} · 🪙 {meta['tokens_used']} tokens")
 
                 st.session_state.messages.append(
                     {"role": "assistant", "content": reply, "meta": meta}

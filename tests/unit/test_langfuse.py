@@ -281,7 +281,9 @@ class TestGetAiReplyLangfuseIntegration:
             )
 
         call_kwargs = mock_lf.start_as_current_observation.call_args.kwargs
-        assert call_kwargs["trace_context"]["trace_id"] == "my-unique-conv-id".replace("-", "")
+        assert call_kwargs["trace_context"]["trace_id"] == "my-unique-conv-id".replace(
+            "-", ""
+        )
 
     @pytest.mark.asyncio
     async def test_input_messages_recorded_in_observation(self) -> None:
