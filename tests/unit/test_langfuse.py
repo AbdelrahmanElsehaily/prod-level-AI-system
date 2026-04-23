@@ -17,8 +17,8 @@ Two concerns tested here:
    - Input messages are recorded on the observation
 
 Langfuse v4 API used in ai.py:
-  with langfuse.start_as_current_observation(type="GENERATION", ...) as obs:
-      langfuse.update_current_generation(output=..., usage=...)
+  with langfuse.start_as_current_observation(as_type="generation", ...) as obs:
+      langfuse.update_current_generation(output=..., usage_details=...)
 
 Why mock Langfuse?
   Same reason we mock sentry_sdk.init() and ollama.AsyncClient — we never
@@ -66,7 +66,7 @@ def make_langfuse_mock() -> MagicMock:
     Build a mock Langfuse client matching the v4 API:
 
       langfuse.start_as_current_observation(...) → sync context manager
-      langfuse.update_current_generation(output=..., usage=...)
+      langfuse.update_current_generation(output=..., usage_details=...)
 
     start_as_current_observation returns a context manager, so we configure
     its __enter__ / __exit__ to behave correctly.
@@ -174,8 +174,8 @@ class TestGetAiReplyLangfuseIntegration:
 
         mock_lf.start_as_current_observation.assert_called_once()
         call_kwargs = mock_lf.start_as_current_observation.call_args.kwargs
-        assert call_kwargs["type"] == "GENERATION"
-        assert call_kwargs["trace_id"] == "conv-abc"
+        assert call_kwargs["as_type"] == "generation"
+        assert call_kwargs["trace_context"]["trace_id"] == "conv-abc"
         assert call_kwargs["model"] is not None
 
     @pytest.mark.asyncio
@@ -206,7 +206,7 @@ class TestGetAiReplyLangfuseIntegration:
         update_kwargs = mock_lf.update_current_generation.call_args.kwargs
 
         assert update_kwargs["output"] == "The answer is 42."
-        usage = update_kwargs["usage"]
+        usage = update_kwargs["usage_details"]
         assert usage["input"] == 8
         assert usage["output"] == 6
         assert usage["total"] == 14
@@ -282,7 +282,7 @@ class TestGetAiReplyLangfuseIntegration:
             )
 
         call_kwargs = mock_lf.start_as_current_observation.call_args.kwargs
-        assert call_kwargs["trace_id"] == "my-unique-conv-id"
+        assert call_kwargs["trace_context"]["trace_id"] == "my-unique-conv-id"
 
     @pytest.mark.asyncio
     async def test_input_messages_recorded_in_observation(self) -> None:
