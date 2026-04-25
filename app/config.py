@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     langfuse_secret_key: str | None = None
     langfuse_public_key: str | None = None
 
+    # Optional — protects GET /metrics. If unset, /metrics returns 403.
+    # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+    metrics_token: str | None = None
+
     # SettingsConfigDict tells Pydantic where to look for values:
     #   env_file=".env"  — load a local .env file if present (for local dev)
     #   extra="ignore"   — silently ignore any extra env vars we don't declare

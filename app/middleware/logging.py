@@ -46,6 +46,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.metrics import metrics
+
 # Get a module-level logger.
 # structlog.get_logger() is cheap — the actual configuration (JSON vs console)
 # is resolved lazily on the first log call using the configuration set in
@@ -144,5 +146,8 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         # Attach the request_id to the response so it's visible in browser
         # DevTools and can be captured by the caller for support requests.
         response.headers["X-Request-ID"] = request_id
+
+        # Record in metrics (excluded paths like /health are skipped above).
+        metrics.record_request(duration_ms=duration_ms)
 
         return response
