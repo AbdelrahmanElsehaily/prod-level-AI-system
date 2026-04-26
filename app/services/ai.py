@@ -76,7 +76,12 @@ import structlog
 
 from app.config import settings
 from app.langfuse_client import langfuse
-from app.metrics import metrics
+from app.metrics import (
+    ai_calls_total,
+    ai_cost_usd_total,
+    ai_errors_total,
+    ai_tokens_total,
+)
 from app.models.database import Message
 from app.models.schemas import AIServiceError
 
@@ -232,7 +237,7 @@ async def get_ai_reply(
     except ollama.ResponseError as exc:
         # ResponseError: Ollama is running but returned an error (e.g. model
         # not found — the model wasn't pulled with `ollama pull <model>`).
-        metrics.record_error()
+        ai_errors_total.labels(model=settings.ollama_model, kind="response_error").inc()
         await logger.aerror(
             "ollama response error",
             conversation_id=conversation_id,
@@ -247,7 +252,7 @@ async def get_ai_reply(
         # Catches connection errors (Ollama not running, wrong URL, network
         # timeouts). We log the original exception for debugging but raise
         # a clean AIServiceError so the HTTP layer stays decoupled from Ollama.
-        metrics.record_error()
+        ai_errors_total.labels(model=settings.ollama_model, kind="unreachable").inc()
         await logger.aerror(
             "ollama unreachable",
             conversation_id=conversation_id,
@@ -318,9 +323,11 @@ async def get_ai_reply(
                 },
             )
 
-    # Record successful AI call in metrics.
+    # Record successful AI call in Prometheus metrics.
     cost_usd = _estimate_cost(input_tokens, output_tokens)
-    metrics.record_ai_call(tokens=total_tokens, cost_usd=cost_usd)
+    ai_calls_total.labels(model=settings.ollama_model).inc()
+    ai_tokens_total.labels(model=settings.ollama_model).inc(total_tokens)
+    ai_cost_usd_total.labels(model=settings.ollama_model).inc(cost_usd)
 
     await logger.ainfo(
         "ai reply received",

@@ -55,8 +55,13 @@ Sentry shows `AIServiceError` events.
 
 ### Diagnose
 
+Open the Grafana Cloud dashboard:
+- **AI errors panel** shows `rate(ai_errors_total[5m])` — should normally be 0.
+- **AI calls panel** shows `rate(ai_calls_total[5m])` — drops to 0 if Ollama is fully down.
+- Filter by the `kind` label: `unreachable` = network issue, `response_error` = Ollama returned an error.
+
+For the raw exposition (debugging only):
 ```bash
-# Check current error count and AI call rate
 curl -H "X-Metrics-Token: <token>" https://<your-railway-url>/metrics
 ```
 
@@ -119,7 +124,8 @@ curl https://<your-railway-url>/health
 # Should return 200 {"status": "healthy"}
 
 curl -H "X-Metrics-Token: <token>" https://<your-railway-url>/metrics
-# errors_total should stop climbing
+# ai_errors_total / http_requests_total{status=~"5.."} should stop climbing
+# (also visible in the Grafana dashboard within ~60s of redeploy)
 ```
 
 ---
@@ -130,6 +136,64 @@ curl -H "X-Metrics-Token: <token>" https://<your-railway-url>/metrics
 |---|---|
 | 503 from `/health` | Railway dashboard → service logs |
 | AI errors spike | Sentry → latest `AIServiceError` events |
-| High latency | `/metrics` → `avg_response_time_ms` + Langfuse traces |
+| High latency | Grafana → `histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))` + Langfuse traces |
 | Need to roll back | Railway → Deployments → Redeploy last green |
 | Postgres locked | `pg_stat_activity` query (see Scenario 1) |
+
+---
+
+## Grafana Cloud — initial setup (one-time)
+
+This app exposes metrics in Prometheus text format at `GET /metrics`,
+protected by the `METRICS_TOKEN` header. Grafana Cloud's hosted scraper
+pulls them every 60s.
+
+### 1. Create a Grafana Cloud account
+
+1. Sign up at https://grafana.com (free tier is enough — 10k active series, 50 GB logs, 14-day retention)
+2. Create a stack. Note your stack URL, e.g. `https://<your-stack>.grafana.net`.
+
+### 2. Add the scrape job
+
+1. In Grafana Cloud → **Connections → Add new connection → Hosted Prometheus metrics endpoint**
+2. Click **Custom scrape job** (not "infrastructure" — we're scraping a single app endpoint).
+3. Configure:
+   - **Job name:** `chat-api`
+   - **Target:** `<your-railway-url>` (no scheme, no path — Grafana adds them)
+   - **Metrics path:** `/metrics`
+   - **Scheme:** `https`
+   - **Scrape interval:** `60s`
+   - **Custom HTTP headers:**
+     - Name: `X-Metrics-Token`
+     - Value: `<your METRICS_TOKEN value>`
+4. Save. Within ~2 minutes you should see your first data points.
+
+### 3. Verify the scrape is working
+
+Grafana Cloud → **Explore** → select your Prometheus data source → run:
+```promql
+up{job="chat-api"}
+```
+- `1` means scraping is healthy.
+- `0` means Grafana reached your URL but got a non-200 (most likely 403 — wrong token).
+- No data at all means Grafana never reached your URL (DNS, firewall, bad target).
+
+### 4. Key queries for the dashboard
+
+| Panel | PromQL |
+|---|---|
+| Requests/sec | `sum(rate(http_requests_total[5m]))` |
+| Error rate (5xx) | `sum(rate(http_requests_total{status=~"5.."}[5m]))` |
+| p95 latency (s) | `histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m])))` |
+| AI calls/min | `sum(rate(ai_calls_total[5m])) * 60` |
+| AI tokens/min | `sum(rate(ai_tokens_total[5m])) * 60` |
+| Estimated $/hour | `sum(rate(ai_cost_usd_total[5m])) * 3600` |
+| Uptime (s) | `time() - app_start_time_seconds` |
+
+### 5. Alerts (in Grafana → Alerting → Alert rules)
+
+Suggested starting set:
+- **High AI error rate:** `sum(rate(ai_errors_total[5m])) > 0.1` for 5m → page
+- **5xx spike:** `sum(rate(http_requests_total{status=~"5.."}[5m])) > 0.5` for 5m → page
+- **p95 latency > 5s:** `histogram_quantile(0.95, ...) > 5` for 10m → warn
+- **App down (no scrape):** `up{job="chat-api"} == 0` for 2m → page

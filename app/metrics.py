@@ -1,89 +1,124 @@
 """
-app/metrics.py — in-memory metrics counters
-============================================
-Lightweight counters that track key operational stats for the /metrics
-endpoint. All state lives in a single module-level instance so every part
-of the app shares the same counters without passing anything around.
+app/metrics.py — Prometheus metrics primitives
+==============================================
+Defines the Counter / Histogram / Gauge instances that the app updates as
+it runs. The /metrics router (app/routers/metrics.py) renders these into
+the Prometheus text format that Grafana Cloud's hosted scraper consumes.
 
-Why in-memory and not a database query?
-  /metrics is hit by monitoring tools (UptimeRobot, Grafana) on short
-  intervals. A DB query per scrape adds latency and load for no benefit —
-  aggregation queries over a large messages table would be slow. In-memory
-  counters are O(1) reads and writes, always fast, never a bottleneck.
+Why prometheus-client and not in-memory counters?
+  In-memory counters live in one process and reset on restart. Prometheus
+  primitives are still per-process, but the Prometheus ecosystem is built
+  to handle that: Grafana Cloud scrapes every replica's /metrics endpoint
+  and aggregates server-side. So the SAME code works whether you run 1
+  replica or 50 — Grafana sums them across replicas at query time.
 
-  Trade-off: counters reset on process restart. For a single-instance
-  deployment this is acceptable — the dashboard shows "since last deploy"
-  which is still useful for spotting spikes. Multi-instance deployments
-  would need Redis counters instead (a future step).
+Metric types — quick primer
+---------------------------
+Counter:   monotonically increasing number. Reset only on process restart.
+           Use for "total events" — requests, errors, tokens.
+           Query rate(...) in Grafana to get "per-second" rate.
 
-Thread safety:
-  FastAPI runs on a single async event loop in one process. Coroutines are
-  cooperative — only one runs at a time, so += on a plain int is safe
-  without locks. If you add workers (--workers N), switch to Redis.
+Histogram: distribution of values bucketed by ranges. Use for durations.
+           Lets Grafana compute p50/p95/p99 latencies via histogram_quantile().
+           NEVER use a single average — it hides outliers.
 
-Usage:
-  from app.metrics import metrics
-  metrics.record_request(duration_ms=45.2)
-  metrics.record_ai_call(tokens=320, cost_usd=0.000019)
-  metrics.record_error()
+Gauge:     value that goes up AND down. Use for "current state" (queue depth,
+           memory usage). We use it for the process start time → uptime.
+
+Naming convention (per Prometheus best practice)
+------------------------------------------------
+  <namespace>_<subsystem>_<name>_<unit>
+  - units always SI base: seconds (not ms), bytes (not MB)
+  - counters end in _total
+  - all_lowercase_with_underscores
+
+Usage
+-----
+    from app.metrics import requests_total, request_duration_seconds
+
+    requests_total.labels(method="GET", path="/health", status="200").inc()
+    request_duration_seconds.labels(method="GET", path="/health").observe(0.043)
 """
 
 import time
-from dataclasses import dataclass, field
 
+from prometheus_client import Counter, Gauge, Histogram
 
-@dataclass
-class Metrics:
-    """All operational counters for the running process."""
+# ---------------------------------------------------------------------------
+# HTTP request metrics — populated by app/middleware/logging.py
+# ---------------------------------------------------------------------------
 
-    # Process start time — used to compute uptime_seconds
-    _started_at: float = field(default_factory=time.monotonic)
+# Total HTTP requests, broken down by method, path, and status code.
+# Labels let Grafana slice by any combination, e.g.:
+#   sum(rate(http_requests_total{status=~"5.."}[5m]))  → server-error rate
+#
+# WARNING: every unique label combination creates a new time series.
+# We use `path` not the raw request URL — never use IDs/UUIDs as labels
+# (would explode cardinality). The middleware passes `request.url.path`
+# which is the route template, e.g. "/chat" not "/chat?msg=hi".
+http_requests_total = Counter(
+    "http_requests_total",
+    "Total HTTP requests handled by the app.",
+    labelnames=("method", "path", "status"),
+)
 
-    # Request counters
-    requests_total: int = 0
-    _total_duration_ms: float = 0.0  # for avg_response_time_ms
+# Histogram of request durations in SECONDS (Prometheus convention — never ms).
+# Default buckets [.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10] cover the
+# typical web-app range (5ms … 10s). Override if your latencies skew differently.
+http_request_duration_seconds = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request duration in seconds.",
+    labelnames=("method", "path"),
+)
 
-    # AI call counters
-    ai_calls_total: int = 0
-    ai_tokens_total: int = 0
-    ai_estimated_cost_usd: float = 0.0
+# ---------------------------------------------------------------------------
+# AI / Ollama metrics — populated by app/services/ai.py
+# ---------------------------------------------------------------------------
 
-    # Error counter (any unhandled exception or AIServiceError)
-    errors_total: int = 0
+# Successful AI inference calls.
+ai_calls_total = Counter(
+    "ai_calls_total",
+    "Total successful AI inference calls.",
+    labelnames=("model",),
+)
 
-    def record_request(self, duration_ms: float) -> None:
-        """Call once per completed HTTP request (success or error)."""
-        self.requests_total += 1
-        self._total_duration_ms += duration_ms
+# Total tokens consumed (input + output combined).
+# Use rate() in Grafana to see tokens/second; sum over time for the bill.
+ai_tokens_total = Counter(
+    "ai_tokens_total",
+    "Total tokens consumed across all AI calls (input + output).",
+    labelnames=("model",),
+)
 
-    def record_ai_call(self, tokens: int, cost_usd: float) -> None:
-        """Call once per successful AI inference."""
-        self.ai_calls_total += 1
-        self.ai_tokens_total += tokens
-        self.ai_estimated_cost_usd += cost_usd
+# Estimated USD cost. Float counter — Prometheus supports non-integer counters.
+ai_cost_usd_total = Counter(
+    "ai_cost_usd_total",
+    "Estimated cumulative cost of AI calls in USD.",
+    labelnames=("model",),
+)
 
-    def record_error(self) -> None:
-        """Call once per AIServiceError or unhandled exception."""
-        self.errors_total += 1
+# AI errors (Ollama down, model not found, response error).
+# Separate from generic HTTP errors so we can alert specifically on
+# "AI provider is broken" vs "the app itself is broken".
+ai_errors_total = Counter(
+    "ai_errors_total",
+    "Total AI inference errors (Ollama unreachable, model errors, etc.).",
+    labelnames=("model", "kind"),
+)
 
-    @property
-    def uptime_seconds(self) -> float:
-        return round(time.monotonic() - self._started_at, 1)
+# ---------------------------------------------------------------------------
+# Process metrics
+# ---------------------------------------------------------------------------
 
-    @property
-    def requests_per_minute(self) -> float:
-        elapsed_minutes = (time.monotonic() - self._started_at) / 60
-        if elapsed_minutes < 0.001:
-            return 0.0
-        return round(self.requests_total / elapsed_minutes, 1)
-
-    @property
-    def avg_response_time_ms(self) -> float:
-        if self.requests_total == 0:
-            return 0.0
-        return round(self._total_duration_ms / self.requests_total, 1)
-
-
-# Module-level singleton — import this everywhere:
-#   from app.metrics import metrics
-metrics = Metrics()
+# Unix-time of process start. We expose start time as a Gauge — Grafana
+# computes uptime as `time() - process_start_time_seconds` at query time,
+# which is more accurate than us recomputing it on every scrape.
+#
+# Note: prometheus-client also auto-registers a `process_start_time_seconds`
+# default collector, but the value depends on the platform; we set our own
+# explicitly so behavior is identical everywhere.
+app_start_time_seconds = Gauge(
+    "app_start_time_seconds",
+    "Unix timestamp when the app process started.",
+)
+app_start_time_seconds.set(time.time())

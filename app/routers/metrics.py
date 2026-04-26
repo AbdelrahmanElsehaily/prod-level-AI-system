@@ -1,36 +1,41 @@
 """
-app/routers/metrics.py — GET /metrics
-======================================
-Returns operational counters for the running process. Protected by a
-secret token so it is not publicly readable.
+app/routers/metrics.py — GET /metrics (Prometheus exposition)
+=============================================================
+Exposes app metrics in the Prometheus text exposition format. Grafana
+Cloud's hosted scraper is configured to GET this URL on a schedule
+(default 60s) with the X-Metrics-Token header attached, parses the body,
+and stores the time series in its managed Prometheus database.
 
 Authentication
 --------------
-The caller must include the header:
+The caller must include:
     X-Metrics-Token: <value of METRICS_TOKEN env var>
 
-Returns 403 if the header is missing or wrong. This is intentionally
-simple — metrics data is not sensitive enough to warrant OAuth, but we
-don't want it publicly indexed either.
+Returns 403 if the header is missing or wrong, OR if METRICS_TOKEN is
+not configured at all (fail-closed: an unset token disables the endpoint
+rather than leaving it open).
 
-Why a custom header and not Basic Auth?
-  Basic Auth requires the client to base64-encode credentials and set an
-  Authorization header. A static token in a custom header is simpler to
-  configure in UptimeRobot, Grafana, and curl one-liners, and equally
-  secure for this use case.
+Response format
+---------------
+Standard Prometheus text exposition (version 0.0.4):
 
-Why not just make /metrics public?
-  Request rates, error counts, and token costs reveal information about
-  traffic patterns and infrastructure costs. A secret header adds a
-  trivial amount of protection without complicating the implementation.
+    # HELP http_requests_total Total HTTP requests handled by the app.
+    # TYPE http_requests_total counter
+    http_requests_total{method="GET",path="/health",status="200"} 42.0
+    ...
+
+Content-Type MUST be `text/plain; version=0.0.4; charset=utf-8` — this
+is what Prometheus scrapers (and Grafana Cloud's hosted agent) expect.
+Returning JSON or omitting the version parameter causes silent scrape
+failures with no useful error.
 """
 
 import structlog
 from fastapi import APIRouter, Header, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.config import settings
-from app.metrics import metrics
 
 logger = structlog.get_logger(__name__)
 
@@ -39,22 +44,21 @@ router = APIRouter()
 
 @router.get(
     "/metrics",
-    summary="Operational metrics",
+    summary="Prometheus metrics exposition",
     description=(
-        "Returns in-memory counters for the running process. "
-        "Requires `X-Metrics-Token` header matching `METRICS_TOKEN` env var."
+        "Returns app metrics in Prometheus text format. "
+        "Requires `X-Metrics-Token` header matching `METRICS_TOKEN` env var. "
+        "Scraped by Grafana Cloud."
     ),
 )
 async def get_metrics(
     x_metrics_token: str | None = Header(default=None),
-) -> JSONResponse:
-    """
-    Return operational counters. Returns 403 if the token is wrong or missing.
-    """
+) -> Response:
+    """Return the Prometheus exposition for all registered metrics."""
     if not settings.metrics_token:
-        # If METRICS_TOKEN is not configured, the endpoint is disabled entirely.
-        # This prevents accidentally exposing metrics in environments where the
-        # env var was forgotten.
+        # Fail-closed: if METRICS_TOKEN is not configured, the endpoint is
+        # disabled entirely. Prevents accidentally exposing metrics in an
+        # environment where the env var was forgotten.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Metrics endpoint is disabled — METRICS_TOKEN not configured.",
@@ -63,22 +67,14 @@ async def get_metrics(
     if x_metrics_token != settings.metrics_token:
         await logger.awarning(
             "metrics auth failed",
-            provided_token=x_metrics_token[:4] + "…" if x_metrics_token else None,
+            provided_token=(x_metrics_token[:4] + "…") if x_metrics_token else None,
         )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid or missing X-Metrics-Token header.",
         )
 
-    return JSONResponse(
-        content={
-            "uptime_seconds": metrics.uptime_seconds,
-            "requests_total": metrics.requests_total,
-            "requests_per_minute": metrics.requests_per_minute,
-            "ai_calls_total": metrics.ai_calls_total,
-            "ai_tokens_total": metrics.ai_tokens_total,
-            "ai_estimated_cost_usd": round(metrics.ai_estimated_cost_usd, 6),
-            "errors_total": metrics.errors_total,
-            "avg_response_time_ms": metrics.avg_response_time_ms,
-        }
-    )
+    # generate_latest() walks the global registry and renders every
+    # Counter/Histogram/Gauge as Prometheus text. CONTENT_TYPE_LATEST is
+    # the exact Content-Type string the Prometheus scraper expects.
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
