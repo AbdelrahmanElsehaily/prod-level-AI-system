@@ -46,7 +46,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from app.metrics import metrics
+from app.metrics import http_request_duration_seconds, http_requests_total
 
 # Get a module-level logger.
 # structlog.get_logger() is cheap — the actual configuration (JSON vs console)
@@ -147,7 +147,14 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         # DevTools and can be captured by the caller for support requests.
         response.headers["X-Request-ID"] = request_id
 
-        # Record in metrics (excluded paths like /health are skipped above).
-        metrics.record_request(duration_ms=duration_ms)
+        # Record in Prometheus metrics. Excluded paths (/health, /metrics)
+        # are skipped above so monitoring traffic doesn't pollute app metrics.
+        # Note: Prometheus convention is SECONDS, never ms — divide by 1000.
+        labels = {
+            "method": request.method,
+            "path": request.url.path,
+        }
+        http_requests_total.labels(**labels, status=str(response.status_code)).inc()
+        http_request_duration_seconds.labels(**labels).observe(duration_ms / 1000.0)
 
         return response
