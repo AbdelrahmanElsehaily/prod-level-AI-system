@@ -107,6 +107,24 @@ ai_errors_total = Counter(
 )
 
 # ---------------------------------------------------------------------------
+# Cache metrics — populated by app/services/ai.py via app/services/cache.py
+# ---------------------------------------------------------------------------
+# Hit and miss are separate counters (not one labelled counter) because Grafana
+# computes the hit rate from both: rate(hits) / (rate(hits) + rate(misses)).
+# We deliberately do NOT export `cache_hit_rate` as its own metric — computing
+# a ratio in app code returns a single point-in-time snapshot, while PromQL
+# computes a windowed rate that handles process restarts and replicas correctly.
+cache_hits_total = Counter(
+    "cache_hits_total",
+    "Total AI response cache hits (Ollama call skipped).",
+)
+
+cache_misses_total = Counter(
+    "cache_misses_total",
+    "Total AI response cache misses (Ollama call required).",
+)
+
+# ---------------------------------------------------------------------------
 # Process metrics
 # ---------------------------------------------------------------------------
 

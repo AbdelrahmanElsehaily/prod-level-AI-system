@@ -43,6 +43,10 @@ dev = [
     "ruff>=0.8.0",
     "mypy>=1.13.0",
     "pre-commit>=4.0.0",
+    # fakeredis: in-memory Redis implementation for unit tests.
+    # Implements the real Redis protocol so cache.py's redis-py calls
+    # exercise real code paths — catches bugs that AsyncMock would miss.
+    "fakeredis>=2.35.0",
 ]
 ui = [
     # Streamlit powers the internal demo chat UI (ui/chat_app.py).
