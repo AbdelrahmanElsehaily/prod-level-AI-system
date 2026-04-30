@@ -35,7 +35,7 @@ import uuid
 import structlog
 from fastapi import APIRouter, HTTPException, status
 
-from app.dependencies import DB
+from app.dependencies import DB, Redis
 from app.models.database import MessageRole
 from app.models.schemas import AIServiceError, ChatRequest, ChatResponse
 from app.services import ai as ai_service
@@ -60,6 +60,7 @@ router = APIRouter()
 async def chat(
     request: ChatRequest,
     db: DB,  # AsyncSession injected by FastAPI via Depends(get_db) — see dependencies.py
+    redis_client: Redis,  # shared Redis pool — used for the AI response cache
 ) -> ChatResponse:
     """
     Core chat endpoint: persist history, call Ollama, return the reply.
@@ -111,6 +112,7 @@ async def chat(
             history=history,
             new_user_message=request.message,
             conversation_id=str(conversation_id),
+            redis_client=redis_client,
         )
     except AIServiceError as exc:
         # The AI service is down or the model is unavailable.
@@ -163,4 +165,5 @@ async def chat(
         reply=ai_response.reply,
         tokens_used=ai_response.total_tokens,  # total (input + output) for the client
         model=ai_response.model,
+        cache_hit=ai_response.cache_hit,
     )

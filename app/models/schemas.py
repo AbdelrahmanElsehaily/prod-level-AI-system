@@ -87,6 +87,14 @@ class ChatResponse(BaseModel):
         description="Total tokens used (prompt + completion) for this exchange."
     )
     model: str = Field(description="The model that generated this response.")
+    cache_hit: bool = Field(
+        default=False,
+        description=(
+            "True if the response was served from the Redis cache instead of "
+            "calling the AI model. Useful for debugging perf and verifying "
+            "the cache is actually working."
+        ),
+    )
 
 
 class AIServiceError(Exception):

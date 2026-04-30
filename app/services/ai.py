@@ -72,6 +72,7 @@ import time
 from dataclasses import dataclass
 
 import ollama
+import redis.asyncio as aioredis
 import structlog
 
 from app.config import settings
@@ -81,9 +82,12 @@ from app.metrics import (
     ai_cost_usd_total,
     ai_errors_total,
     ai_tokens_total,
+    cache_hits_total,
+    cache_misses_total,
 )
 from app.models.database import Message
 from app.models.schemas import AIServiceError
+from app.services import cache
 
 logger = structlog.get_logger(__name__)
 
@@ -143,6 +147,7 @@ class AIResponse:
     tokens_used: int  # output tokens — stored per message in DB
     total_tokens: int  # input + output — returned in HTTP response
     model: str
+    cache_hit: bool = False  # True if served from Redis cache (no Ollama call)
 
 
 # ---------------------------------------------------------------------------
@@ -185,9 +190,19 @@ async def get_ai_reply(
     history: list[Message],
     new_user_message: str,
     conversation_id: str,
+    redis_client: aioredis.Redis | None = None,
 ) -> AIResponse:
     """
     Send the conversation history + new message to Ollama and return the reply.
+
+    Cache flow (when redis_client is provided):
+      1. Build a deterministic key from (model, full conversation context).
+      2. Look up Redis. On hit → return cached AIResponse, skip Ollama entirely.
+      3. On miss → call Ollama, store the result in Redis with a 1h TTL.
+
+    Caching is opt-in via the redis_client parameter so unit tests for the
+    Ollama path don't need a Redis mock unless they explicitly want one.
+    The router always passes a real client.
 
     On success, the call is recorded as a Langfuse GENERATION observation
     (if credentials are configured). On failure, the error is logged via
@@ -200,15 +215,41 @@ async def get_ai_reply(
         new_user_message: The user's latest message text.
         conversation_id:  Used for structured logging and as the Langfuse
                           trace ID so all calls in one conversation are grouped.
+        redis_client:     Optional Redis client. If provided, responses are
+                          cached and served from cache when possible.
 
     Returns:
-        AIResponse with the reply text, token counts, and model name.
+        AIResponse with the reply text, token counts, model name, and a
+        cache_hit flag indicating whether the reply came from the cache.
 
     Raises:
         AIServiceError: if Ollama is unreachable or returns an error.
                         The router catches this and returns HTTP 503.
     """
     messages = _messages_to_ollama_format(history, new_user_message)
+
+    # -----------------------------------------------------------------------
+    # Cache lookup (fail-open: if Redis is down, fall through to Ollama).
+    # -----------------------------------------------------------------------
+    cache_key: str | None = None
+    if redis_client is not None:
+        cache_key = cache.make_cache_key(settings.ollama_model, messages)
+        cached = await cache.get_cached(redis_client, cache_key)
+        if cached is not None:
+            cache_hits_total.inc()
+            await logger.ainfo(
+                "cache hit",
+                conversation_id=conversation_id,
+                cache_key=cache_key,
+            )
+            return AIResponse(
+                reply=cached["reply"],
+                tokens_used=cached["tokens_used"],
+                total_tokens=cached["total_tokens"],
+                model=cached["model"],
+                cache_hit=True,
+            )
+        cache_misses_total.inc()
 
     # Build request headers.
     # For Ollama cloud, an API key is required and sent as a Bearer token.
@@ -342,9 +383,27 @@ async def get_ai_reply(
         reply_length=len(reply_text),
     )
 
-    return AIResponse(
+    ai_response = AIResponse(
         reply=reply_text,
         tokens_used=output_tokens,
         total_tokens=total_tokens,
         model=settings.ollama_model,
+        cache_hit=False,
     )
+
+    # Store in the cache for next time (fail-open inside set_cached).
+    # Only cache successful, non-empty responses — never cache an empty reply,
+    # that would freeze a transient model glitch into the cache for an hour.
+    if redis_client is not None and cache_key is not None and reply_text:
+        await cache.set_cached(
+            redis_client,
+            cache_key,
+            {
+                "reply": reply_text,
+                "tokens_used": output_tokens,
+                "total_tokens": total_tokens,
+                "model": settings.ollama_model,
+            },
+        )
+
+    return ai_response

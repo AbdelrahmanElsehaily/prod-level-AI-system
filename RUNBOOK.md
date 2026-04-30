@@ -130,12 +130,63 @@ curl -H "X-Metrics-Token: <token>" https://<your-railway-url>/metrics
 
 ---
 
+## Scenario 4 — A bad AI response is stuck in the cache
+
+The chat endpoint caches AI replies in Redis for 1 hour, keyed by the full
+conversation context. Most of the time this is what you want — repeat
+questions are fast and free. Occasionally a bad reply (factually wrong,
+broken formatting, leaked debug text) gets cached, and every user asking
+the same question sees the same bad reply for up to an hour.
+
+### How to confirm a cache hit is the problem
+
+```bash
+curl -s -X POST https://<your-railway-url>/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"<the message that gives the bad reply>"}' \
+  | jq '.cache_hit, .reply'
+```
+
+If `cache_hit` is `true`, the reply came from Redis. Flush it.
+
+### Flush ONLY the chat cache (preferred)
+
+All chat cache keys share the prefix `chat:cache:`. Delete those without
+touching anything else (rate limiter state stays intact):
+
+```bash
+# Connect via Railway dashboard → Redis service → Connect → redis-cli command
+redis-cli --scan --pattern 'chat:cache:*' | xargs -r redis-cli del
+```
+
+### Nuclear option — flush everything
+
+Only if the targeted flush is not enough. This also wipes rate limit
+state (users get a fresh quota), but does NOT touch Postgres.
+
+```bash
+redis-cli FLUSHDB
+```
+
+### Verify
+
+```bash
+curl -s -X POST https://<your-railway-url>/chat ... | jq '.cache_hit'
+# Should be false on the next call (cache miss → fresh Ollama response)
+```
+
+If the same message keeps producing a bad reply on cache misses, the
+issue is the model — see Scenario 2.
+
+---
+
 ## Quick reference
 
 | Signal | First place to look |
 |---|---|
 | 503 from `/health` | Railway dashboard → service logs |
 | AI errors spike | Sentry → latest `AIServiceError` events |
+| Bad reply repeated | Check `cache_hit` in `/chat` response → flush `chat:cache:*` |
 | High latency | Grafana → `histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))` + Langfuse traces |
 | Need to roll back | Railway → Deployments → Redeploy last green |
 | Postgres locked | `pg_stat_activity` query (see Scenario 1) |
