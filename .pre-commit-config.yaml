@@ -35,7 +35,13 @@ repos:
     hooks:
       - id: mypy
         name: mypy (app/)
-        entry: uv run --extra dev mypy app/
+        # --no-incremental disables the .mypy_cache. Without this, mypy can
+        # silently skip re-checking files when their dependency graph changed
+        # (e.g. you added a new submodule and another file imports it). The
+        # stale cache says "ai.py is fine" because it didn't see the new
+        # `from app.services import cache` line yet — and the bug ships.
+        # Cost: ~3s instead of ~0.5s. Worth it.
+        entry: uv run --extra dev mypy --no-incremental app/
         language: system
         # Run once per commit, not once per file. mypy needs to see the whole
         # package to resolve cross-module types.
