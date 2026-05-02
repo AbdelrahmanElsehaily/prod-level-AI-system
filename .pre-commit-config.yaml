@@ -1,7 +1,44 @@
+# Pre-commit hooks — run automatically on `git commit` after `pre-commit install`.
+#
+# Each contributor must run this ONCE per clone:
+#   uv run --extra dev pre-commit install
+#
+# CI runs the same checks (see .github/workflows/ci.yml). Catching them at
+# commit time means you never push a PR that fails the lint/type job.
+#
+# To run all hooks against the whole repo manually:
+#   uv run --extra dev pre-commit run --all-files
 repos:
+  # ---------------------------------------------------------------------------
+  # ruff — linting + formatting (fast, no env needed)
+  # ---------------------------------------------------------------------------
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.12
     hooks:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+
+  # ---------------------------------------------------------------------------
+  # mypy — static type checking
+  # ---------------------------------------------------------------------------
+  # Why a `local` repo and not the official mirrors-mypy?
+  #   The mirror runs mypy in its own isolated venv with no project deps,
+  #   which produces a flood of false-positive "missing import" errors for
+  #   pydantic, fastapi, redis, etc. Using `language: system` runs mypy
+  #   against THIS project's uv-managed venv, so all real types are visible.
+  #
+  # Scope: only `app/` — same as CI (.github/workflows/ci.yml).
+  # Tests use MagicMock extensively, which strict mypy chokes on. We rely
+  # on test signatures + pytest assertions for test-side type safety.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (app/)
+        entry: uv run --extra dev mypy app/
+        language: system
+        # Run once per commit, not once per file. mypy needs to see the whole
+        # package to resolve cross-module types.
+        pass_filenames: false
+        # Only trigger when Python files in app/ change (skip docs / md commits).
+        files: ^app/.*\.py$
