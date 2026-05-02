@@ -87,7 +87,7 @@ from app.metrics import (
 )
 from app.models.database import Message
 from app.models.schemas import AIServiceError
-from app.services import cache
+from app.services.cache import get_cached, make_cache_key, set_cached
 
 logger = structlog.get_logger(__name__)
 
@@ -233,8 +233,8 @@ async def get_ai_reply(
     # -----------------------------------------------------------------------
     cache_key: str | None = None
     if redis_client is not None:
-        cache_key = cache.make_cache_key(settings.ollama_model, messages)
-        cached = await cache.get_cached(redis_client, cache_key)
+        cache_key = make_cache_key(settings.ollama_model, messages)
+        cached = await get_cached(redis_client, cache_key)
         if cached is not None:
             cache_hits_total.inc()
             await logger.ainfo(
@@ -395,7 +395,7 @@ async def get_ai_reply(
     # Only cache successful, non-empty responses — never cache an empty reply,
     # that would freeze a transient model glitch into the cache for an hour.
     if redis_client is not None and cache_key is not None and reply_text:
-        await cache.set_cached(
+        await set_cached(
             redis_client,
             cache_key,
             {
