@@ -33,7 +33,7 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Integer, Text, func
+from sqlalchemy import DateTime, Enum, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -214,4 +214,53 @@ class Message(Base):
     conversation: Mapped["Conversation"] = relationship(
         "Conversation",
         back_populates="messages",
+    )
+
+
+class Document(Base):
+    """
+    Represents one uploaded document the user can chat with via dspy.RLM.
+
+    We store ONLY the extracted plain text — not the original binary file.
+    The RLM consumes text; the original PDF/DOCX bytes are useless once
+    parsed. Skipping binary storage keeps the database small and removes
+    a whole class of attachment-handling complexity (no S3, no signed URLs).
+
+    Schema:
+      id           — UUID primary key.
+      filename     — what the user uploaded it as (display only, never trusted
+                     for filesystem ops — see app/services/documents.py).
+      content_type — MIME type sniffed at upload (text/plain, application/pdf, ...).
+      content_text — the FULL extracted text. Unlimited length. Loaded into
+                     the dspy.RLM Pyodide sandbox at query time.
+      size_bytes   — original upload size before extraction. Used for the
+                     per-corpus storage cap enforced at upload time.
+      created_at   — when the upload happened. Indexed.
+    """
+
+    __tablename__ = "documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+
+    # 255 chars matches POSIX NAME_MAX. Long enough for any realistic upload,
+    # short enough that we never have to think about index sizing.
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # MIME types are rarely longer than ~64 chars; 128 is a comfortable cap.
+    content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    # TEXT, not VARCHAR. The app-layer 1 MB upload limit is the real guardrail.
+    content_text: Mapped[str] = mapped_column(Text, nullable=False)
+
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,  # GET /documents orders by created_at DESC
     )

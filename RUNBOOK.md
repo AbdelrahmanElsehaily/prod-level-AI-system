@@ -180,6 +180,75 @@ issue is the model — see Scenario 2.
 
 ---
 
+## Scenario 5 — `/chat/docs` is slow, expensive, or looping
+
+The `/chat/docs` endpoint runs `dspy.RLM`, which lets the LM recursively call
+sub-LLMs while exploring uploaded documents in a Pyodide sandbox. A misbehaving
+prompt can chew through many sub-calls per request.
+
+### Hard caps (already in code)
+
+Defined in `app/services/rag.py`:
+
+```python
+MAX_LLM_CALLS = 20   # absolute cap on sub-LM invocations per request
+MAX_ITERATIONS = 10  # absolute cap on recursive iterations
+```
+
+These are enforced by `dspy.RLM` itself — when the cap is hit the model is
+forced to return whatever answer it has. A runaway question can NOT spend
+more than `MAX_LLM_CALLS` worth of tokens.
+
+### Diagnose
+
+```bash
+# Look at the structlog event "rlm answer produced" — it logs total_tokens
+# and iterations for every successful answer. In Grafana / Loki:
+{app="chat-api"} |= "rlm answer produced" | json | total_tokens > 50000
+
+# If you see iterations consistently near MAX_ITERATIONS, the questions
+# are genuinely complex — consider raising the cap or splitting the corpus.
+```
+
+### Mitigations
+
+1. **Specific scope:** ask users to pass `document_ids` instead of letting the
+   RLM see the whole corpus.
+2. **Lower the caps** in `app/services/rag.py` and redeploy. `MAX_LLM_CALLS=10`
+   is fine for short factual questions.
+3. **Trim huge documents:** the corpus is loaded fully into the sandbox per
+   request. A 1 MB doc dominates the iteration cost. Delete + re-upload a
+   shorter version if a particular doc is causing pain.
+
+### Wipe the document corpus
+
+If a bad doc keeps causing problems:
+
+```bash
+# Connect to Postgres via Railway → Postgres service → Connect
+DELETE FROM documents;
+# Or just one:
+DELETE FROM documents WHERE id = '<uuid>';
+```
+
+The next `/chat/docs` request will see an empty corpus and return 404 until
+you re-upload.
+
+### When the sandbox can't start
+
+If `/chat/docs` returns 503 with logs showing `Deno is not installed` or
+similar, the Pyodide runtime isn't available. Verify on the Railway service:
+
+```bash
+# In the Railway shell (one-off command)
+deno --version   # must print a version
+```
+
+If missing, the Dockerfile install of Deno failed. Force a clean rebuild
+(Railway → service → Deployments → Redeploy → "Clear cache and redeploy").
+
+---
+
 ## Quick reference
 
 | Signal | First place to look |
@@ -187,6 +256,8 @@ issue is the model — see Scenario 2.
 | 503 from `/health` | Railway dashboard → service logs |
 | AI errors spike | Sentry → latest `AIServiceError` events |
 | Bad reply repeated | Check `cache_hit` in `/chat` response → flush `chat:cache:*` |
+| `/chat/docs` slow/expensive | Lower `MAX_LLM_CALLS` in `rag.py` or scope to fewer `document_ids` |
+| `/chat/docs` returns 503, "Deno not installed" | Redeploy Railway service with cleared build cache |
 | High latency | Grafana → `histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))` + Langfuse traces |
 | Need to roll back | Railway → Deployments → Redeploy last green |
 | Postgres locked | `pg_stat_activity` query (see Scenario 1) |

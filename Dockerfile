@@ -74,8 +74,27 @@ WORKDIR /app
 #   the layer is committed we never need it again. Deleting it in the SAME RUN
 #   instruction (important! a separate RUN would create a new layer on top of
 #   the old one without actually shrinking the image) saves ~30 MB.
+# Install curl (healthcheck) and Deno (Pyodide sandbox runtime for dspy.RLM).
+#
+# Why Deno?
+#   dspy.RLM's default interpreter runs Pyodide (Python compiled to WASM)
+#   inside a Deno process for sandbox isolation. Without Deno on PATH, the
+#   /chat/docs endpoint raises at first use:
+#     RuntimeError: Deno is not installed. Please install Deno from https://deno.com
+#
+# Why apt-get for curl + the official install script for Deno?
+#   Deno is not in Debian's apt repos. The shell installer is the upstream
+#   recommendation and pins to a stable release. We pipe to bash with -s and
+#   /bin/bash explicit so it doesn't fall back to dash.
+#
+# Why /usr/local/bin?
+#   The Deno installer defaults to ~/.deno/bin which is per-user. Moving the
+#   binary to /usr/local/bin makes it visible to every process in the
+#   container (uvicorn, alembic, our Python subprocess for Pyodide) regardless
+#   of the user the process runs as.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl unzip \
+    && curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local /bin/bash -s -- -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the pre-built virtual environment from the deps stage.

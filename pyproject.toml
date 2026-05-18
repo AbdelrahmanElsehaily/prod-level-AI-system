@@ -33,6 +33,9 @@ dependencies = [
     "sentry-sdk[fastapi]>=2.19.0",
     "langfuse>=4.5.0",
     "prometheus-client>=0.21.0",
+    "dspy-ai>=3.1.2",
+    "pypdf>=5.0.0",
+    "python-multipart>=0.0.20",
 ]
 
 [project.optional-dependencies]

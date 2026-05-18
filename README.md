@@ -169,9 +169,49 @@ uv run streamlit run ui/chat_app.py
 |---|---|---|---|
 | `GET` | `/health` | none | Pings Postgres + Redis. 200 healthy / 503 degraded. UptimeRobot watches this. |
 | `POST` | `/chat` | none (rate-limited 20/min/IP) | Send message, get AI reply. Returns `cache_hit: bool`. |
+| `POST` | `/chat/docs` | none (rate-limited) | Ask a question grounded in uploaded documents via `dspy.RLM`. |
+| `POST` | `/documents` | none | Upload PDF/TXT/MD (multipart). Returns document metadata. |
+| `GET` | `/documents` | none | List uploaded documents (newest first). |
+| `DELETE` | `/documents/{id}` | none | Delete one document. |
 | `GET` | `/metrics` | `X-Metrics-Token` header | Prometheus exposition. Scraped by Grafana Cloud. |
 | `GET` | `/debug/*` | none (disabled in prod) | Dev-only inspection routes. |
 | `GET` | `/docs` | none (disabled in prod) | Swagger UI. |
+
+### Document Q&A flow
+
+`/chat/docs` is powered by `dspy.RLM` — a **recursive language model** that
+loads documents into a Pyodide sandbox and lets the LLM navigate them via
+a Python REPL. No vector DB, no chunking, no embeddings.
+
+```
+User uploads PDF / TXT / MD  ──▶  POST /documents
+                                    │
+                                    ▼
+                            Extract plain text (pypdf)
+                                    │
+                                    ▼
+                              Store in Postgres
+                                    │
+                                    ▼
+User asks a question  ──▶  POST /chat/docs
+                                    │
+                                    ▼
+                       Load corpus into Pyodide sandbox
+                                    │
+                                    ▼
+                  dspy.RLM: LM writes Python to grep/slice/
+                  recursively sub-query the corpus until it
+                  can answer (capped at 20 sub-calls)
+                                    │
+                                    ▼
+                            Answer + iteration count + token usage
+```
+
+**Why RLM instead of vector RAG?**
+- Multi-hop questions ("how does X in doc A relate to Y in doc B?") work natively
+- No embedding model or vector index to maintain
+- Long documents are not artificially chunked
+- Trade-off: many LM sub-calls per question (capped); not cacheable
 
 ---
 
@@ -242,8 +282,8 @@ app/
 ├── langfuse_client.py  module-level Langfuse client
 ├── metrics.py          Prometheus Counters / Histograms / Gauges
 ├── middleware/         logging, rate_limit
-├── routers/            chat, health, metrics, debug
-├── services/           chat_history, ai, cache
+├── routers/            chat, health, metrics, debug, documents
+├── services/           chat_history, ai, cache, documents, rag
 └── models/             database (SQLAlchemy ORM), schemas (Pydantic)
 
 migrations/             Alembic

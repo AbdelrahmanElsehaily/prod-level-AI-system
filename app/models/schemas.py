@@ -30,7 +30,9 @@ How FastAPI uses these:
                    to auto-generate the OpenAPI documentation at /docs.
 """
 
-from pydantic import BaseModel, Field
+from datetime import datetime
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatRequest(BaseModel):
@@ -94,6 +96,83 @@ class ChatResponse(BaseModel):
             "calling the AI model. Useful for debugging perf and verifying "
             "the cache is actually working."
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Document Q&A (Step 13 — dspy.RLM)
+# ---------------------------------------------------------------------------
+
+
+class DocumentResponse(BaseModel):
+    """
+    Body of GET /documents (list) and POST /documents (after upload).
+
+    Mirrors the Document ORM model but excludes content_text — full document
+    text can be megabytes and is never returned by the list endpoint. To
+    retrieve full text, query the chat endpoint with the document_id.
+    """
+
+    # from_attributes lets FastAPI build this directly from a SQLAlchemy ORM
+    # object — no manual field mapping in the router.
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str = Field(description="UUID of the document.")
+    filename: str = Field(description="Original upload filename.")
+    content_type: str = Field(description="MIME type of the uploaded file.")
+    size_bytes: int = Field(description="Original upload size in bytes.")
+    created_at: datetime = Field(description="When the document was uploaded.")
+
+
+class DocsChatRequest(BaseModel):
+    """
+    Body of POST /chat/docs.
+
+    Fields:
+      question:     The user's question about the uploaded document(s).
+      document_ids: Restrict the RLM to these documents only. If omitted or
+                    empty, all stored documents are loaded into the sandbox —
+                    fine when storage is small (default cap is 10 MB total)
+                    but can be slow/expensive for large corpora.
+    """
+
+    question: str = Field(
+        ...,
+        min_length=1,
+        description="The question to ask of the uploaded documents.",
+        examples=["What does the contract say about termination?"],
+    )
+
+    document_ids: list[str] | None = Field(
+        default=None,
+        description=(
+            "Optional list of document UUIDs to scope the search to. "
+            "If omitted, all documents are visible to the RLM."
+        ),
+    )
+
+
+class DocsChatResponse(BaseModel):
+    """
+    Body of POST /chat/docs.
+
+    Fields:
+      answer:           The RLM's final answer.
+      documents_used:   IDs of documents the RLM was given access to. NOT a
+                        list of which it actually read — RLM may or may not
+                        touch every doc in the sandbox.
+      iterations:       How many internal LM steps the RLM took. Useful for
+                        debugging "why is this slow / expensive".
+      total_tokens:     Sum of tokens used across all internal LM calls.
+    """
+
+    answer: str = Field(description="The RLM's answer to the question.")
+    documents_used: list[str] = Field(
+        description="Document UUIDs loaded into the RLM sandbox for this query."
+    )
+    iterations: int = Field(description="Number of internal LM steps the RLM took.")
+    total_tokens: int = Field(
+        description="Total tokens consumed across all internal LM calls."
     )
 
 
