@@ -34,7 +34,7 @@ from app.langfuse_client import flush as flush_langfuse
 from app.logging_config import setup_logging
 from app.middleware.logging import LoggingMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
-from app.routers import chat, debug, documents, health, metrics
+from app.routers import chat, debug, documents, health, metrics, rag
 from app.sentry import init_sentry
 
 logger = structlog.get_logger(__name__)
@@ -115,6 +115,7 @@ app.include_router(health.router, tags=["Health"])
 app.include_router(metrics.router, tags=["Metrics"])
 app.include_router(chat.router, tags=["Chat"])
 app.include_router(documents.router)  # prefix + tags set on the router itself
+app.include_router(rag.router)  # mounts POST /chat/docs — see app/routers/rag.py
 
 # Debug router: only mounted in non-production environments.
 #
